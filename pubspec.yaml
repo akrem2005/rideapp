@@ -42,6 +42,8 @@ dependencies:
   image_picker: ^0.8.7
   provider: ^6.1.1
   file_picker: ^5.2.5
+  geolocator: ^10.0.0
+  geocoding: ^2.1.0
 
 dev_dependencies:
   flutter_test:
@@ -72,6 +74,10 @@ flutter:
     - lib/shared/assets/phone2.png
     - lib/shared/assets/pass.png
     - lib/shared/assets/maps.jpg
+    - lib/shared/assets/economy.png
+    - lib/shared/assets/basic.png
+    - lib/shared/assets/executive.png
+    - lib/shared/assets/minivan.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:

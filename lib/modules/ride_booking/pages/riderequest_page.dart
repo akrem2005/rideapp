@@ -2,7 +2,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+
 import 'discount_page.dart';
 import 'order_history_page.dart';
 
@@ -11,22 +14,61 @@ class RideRequestPage extends HookConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final pickupController = useTextEditingController();
+    final pickupController =
+        useTextEditingController(text: 'Fetching location...');
     final destinationController = useTextEditingController();
+
+    // Use effect to fetch location once
+    useEffect(() {
+      Future<void> setLocation() async {
+        try {
+          bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+          if (!serviceEnabled) {
+            pickupController.text = 'Location service disabled';
+            return;
+          }
+
+          LocationPermission permission = await Geolocator.checkPermission();
+          if (permission == LocationPermission.denied) {
+            permission = await Geolocator.requestPermission();
+            if (permission == LocationPermission.denied) {
+              pickupController.text = 'Permission denied';
+              return;
+            }
+          }
+
+          if (permission == LocationPermission.deniedForever) {
+            pickupController.text = 'Permission permanently denied';
+            return;
+          }
+
+          final position = await Geolocator.getCurrentPosition(
+              desiredAccuracy: LocationAccuracy.high);
+          final placemarks = await placemarkFromCoordinates(
+              position.latitude, position.longitude);
+          final place = placemarks.first;
+
+          pickupController.text =
+              '${place.street}, ${place.locality}, ${place.country}';
+        } catch (e) {
+          pickupController.text = 'Location unavailable';
+        }
+      }
+
+      setLocation();
+      return null;
+    }, []);
 
     return Scaffold(
       drawer: _buildSideNavBar(context),
       body: Stack(
         children: [
-          // Background map
           Positioned.fill(
             child: Image.asset(
               'lib/shared/assets/maps.jpg',
               fit: BoxFit.cover,
             ),
           ),
-
-          // Top bar
           SafeArea(
             child: Padding(
               padding:
@@ -58,23 +100,13 @@ class RideRequestPage extends HookConsumerWidget {
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: PopupMenuButton<String>(
-                      icon: const Icon(CupertinoIcons.bell,
-                          color: Color(0xFF555555)),
-                      onSelected: (value) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text("Selected: $value")),
-                        );
-                      },
-                      itemBuilder: (context) => [],
-                    ),
+                    child: const Icon(CupertinoIcons.bell,
+                        color: Color(0xFF555555)),
                   ),
                 ],
               ),
             ),
           ),
-
-          // Bottom card
           Align(
             alignment: Alignment.bottomCenter,
             child: Padding(
@@ -104,7 +136,6 @@ class RideRequestPage extends HookConsumerWidget {
                               TextField(
                                 controller: pickupController,
                                 decoration: const InputDecoration(
-                                  hintText: 'Enter pickup location',
                                   border: InputBorder.none,
                                   isDense: true,
                                 ),
@@ -174,13 +205,39 @@ class RideRequestPage extends HookConsumerWidget {
   }
 
   void _showAvailableCars(BuildContext context) {
+    final cars = [
+      {
+        'name': 'Economy',
+        'seats': '4 seats',
+        'icon': CupertinoIcons.car_detailed,
+        'eta': '5-10 mins'
+      },
+      {
+        'name': 'Basic',
+        'seats': '4 seats',
+        'icon': CupertinoIcons.car,
+        'eta': '6-12 mins'
+      },
+      {
+        'name': 'Executive',
+        'seats': '4 seats',
+        'icon': CupertinoIcons.car_fill,
+        'eta': '4-8 mins'
+      },
+      {
+        'name': 'Minivan',
+        'seats': '6 seats',
+        'icon': CupertinoIcons.bus,
+        'eta': '10-15 mins'
+      },
+    ];
+
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (context) {
-        final cars = ['Toyota Prius', 'Honda Civic', 'Tesla Model 3', 'BMW X5'];
         return Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -191,12 +248,12 @@ class RideRequestPage extends HookConsumerWidget {
               const SizedBox(height: 10),
               ...cars.map(
                 (car) => ListTile(
-                  leading: const Icon(CupertinoIcons.car),
-                  title: Text(car),
-                  subtitle: const Text("ETA: 5-10 mins"),
+                  leading: Icon(car['icon'] as IconData),
+                  title: Text(car['name'] as String),
+                  subtitle: Text('${car['seats']} • ETA: ${car['eta']}'),
                   onTap: () {
                     Navigator.pop(context);
-                    _showSearchingBottomSheet(context, car);
+                    _showSearchingBottomSheet(context, car['name'] as String);
                   },
                 ),
               ),
@@ -235,48 +292,50 @@ class RideRequestPage extends HookConsumerWidget {
             }, []);
 
             if (!showDriver.value) {
-              // Show searching with countdown
               return Padding(
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.all(16),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
+                    const CupertinoActivityIndicator(radius: 22),
+                    const SizedBox(height: 20),
                     const Text(
-                      "Searching for driver...",
-                      style:
-                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      "Searching for a driver...",
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                    const SizedBox(height: 20),
-                    const CircularProgressIndicator(),
-                    const SizedBox(height: 20),
-                    Text("Estimated wait time: ${counter.value} seconds"),
+                    const SizedBox(height: 12),
+                    Text(
+                      "Estimated wait time: ${counter.value} seconds",
+                      style: const TextStyle(
+                        fontSize: 14,
+                      ),
+                    ),
                   ],
                 ),
               );
             } else {
-              // Show driver info after countdown
               return Padding(
                 padding: const EdgeInsets.all(24),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text(
-                      "Driver Found!",
-                      style:
-                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                    ),
+                    const Text("Driver Found!",
+                        style: TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 12),
                     ListTile(
                       leading: const CircleAvatar(
                         backgroundImage:
                             AssetImage('lib/shared/assets/driver_avatar.png'),
                       ),
-                      title: Text("Alex Johnson"),
+                      title: const Text("Alex Johnson"),
                       subtitle: const Text("Arriving in 3 minutes"),
                       trailing: const Icon(CupertinoIcons.phone),
-                      onTap: () {
-                        // Optional: Add call driver logic
-                      },
+                      onTap: () {},
                     ),
                     const SizedBox(height: 24),
                     SizedBox(
@@ -297,14 +356,11 @@ class RideRequestPage extends HookConsumerWidget {
                             borderRadius: BorderRadius.circular(12),
                           ),
                         ),
-                        child: const Text(
-                          'Confirm',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
+                        child: const Text('Confirm',
+                            style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white)),
                       ),
                     ),
                   ],
@@ -322,9 +378,7 @@ class RideRequestPage extends HookConsumerWidget {
       backgroundColor: const Color(0xFFF5F5F5),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.only(
-          topRight: Radius.circular(30),
-          bottomRight: Radius.circular(30),
-        ),
+            topRight: Radius.circular(30), bottomRight: Radius.circular(30)),
       ),
       child: Column(
         children: [
@@ -333,20 +387,17 @@ class RideRequestPage extends HookConsumerWidget {
             child: Row(
               children: [
                 const CircleAvatar(
-                  radius: 30,
-                  backgroundImage: AssetImage('lib/shared/assets/avatar.png'),
-                ),
+                    radius: 30,
+                    backgroundImage:
+                        AssetImage('lib/shared/assets/avatar.png')),
                 const SizedBox(width: 12),
                 const Expanded(
-                  child: Text(
-                    "John Doe",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 24,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  child: Text("John Doe",
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 24),
+                      overflow: TextOverflow.ellipsis),
                 ),
               ],
             ),
@@ -356,47 +407,38 @@ class RideRequestPage extends HookConsumerWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               children: [
                 _drawerCard(
-                  icon: CupertinoIcons.time,
-                  label: "Trip Orders",
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => const OrderHistoryPage()),
-                    );
-                  },
-                ),
+                    icon: CupertinoIcons.time,
+                    label: "Trip Orders",
+                    onTap: () {
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (context) => const OrderHistoryPage()));
+                    }),
                 _drawerCard(
-                  icon: CupertinoIcons.tag,
-                  label: "Discounts",
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => const DiscountPage()),
-                    );
-                  },
-                ),
+                    icon: CupertinoIcons.tag,
+                    label: "Discounts",
+                    onTap: () {
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (context) => const DiscountPage()));
+                    }),
                 _drawerCard(
-                  icon: CupertinoIcons.lock,
-                  label: "Privacy Policy",
-                  onTap: () {},
-                ),
+                    icon: CupertinoIcons.lock,
+                    label: "Privacy Policy",
+                    onTap: () {}),
                 _drawerCard(
-                  icon: CupertinoIcons.doc_text,
-                  label: "Terms & Conditions",
-                  onTap: () {},
-                ),
+                    icon: CupertinoIcons.doc_text,
+                    label: "Terms & Conditions",
+                    onTap: () {}),
                 const SizedBox(height: 20),
                 _drawerCard(
-                  icon: CupertinoIcons.square_arrow_right,
-                  label: "Logout",
-                  iconColor: Colors.red,
-                  textColor: Colors.red,
-                  onTap: () {
-                    // Add logout logic
-                  },
-                ),
+                    icon: CupertinoIcons.square_arrow_right,
+                    label: "Logout",
+                    iconColor: Colors.red,
+                    textColor: Colors.red,
+                    onTap: () {}),
               ],
             ),
           ),

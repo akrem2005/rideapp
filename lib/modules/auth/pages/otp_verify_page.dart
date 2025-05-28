@@ -3,7 +3,7 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:pin_code_fields/pin_code_fields.dart';
 import '../providers/auth_provider.dart';
-import '../../ride_booking/pages/home.dart';
+import '../../ride_booking/pages/riderequest_page.dart';
 
 class OTPVerifyPage extends HookConsumerWidget {
   final String phoneNumber;
