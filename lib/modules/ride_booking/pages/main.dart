@@ -209,25 +209,25 @@ class RideRequestPage extends HookConsumerWidget {
       {
         'name': 'Economy',
         'seats': '4 seats',
-        'icon': CupertinoIcons.car_detailed,
+        'icon': 'lib/shared/assets/economy.png',
         'eta': '5-10 mins'
       },
       {
         'name': 'Basic',
         'seats': '4 seats',
-        'icon': CupertinoIcons.car,
+        'icon': 'lib/shared/assets/basic.png',
         'eta': '6-12 mins'
       },
       {
         'name': 'Executive',
         'seats': '4 seats',
-        'icon': CupertinoIcons.car_fill,
+        'icon': 'lib/shared/assets/executive.png',
         'eta': '4-8 mins'
       },
       {
         'name': 'Minivan',
         'seats': '6 seats',
-        'icon': CupertinoIcons.bus,
+        'icon': 'lib/shared/assets/minivan.png',
         'eta': '10-15 mins'
       },
     ];
@@ -248,7 +248,11 @@ class RideRequestPage extends HookConsumerWidget {
               const SizedBox(height: 10),
               ...cars.map(
                 (car) => ListTile(
-                  leading: Icon(car['icon'] as IconData),
+                  leading: Image.asset(
+                    car['icon'] as String,
+                    width: 65,
+                    height: 65,
+                  ),
                   title: Text(car['name'] as String),
                   subtitle: Text('${car['seats']} • ETA: ${car['eta']}'),
                   onTap: () {
@@ -294,27 +298,32 @@ class RideRequestPage extends HookConsumerWidget {
             if (!showDriver.value) {
               return Padding(
                 padding: const EdgeInsets.all(16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const CupertinoActivityIndicator(radius: 22),
-                    const SizedBox(height: 20),
-                    const Text(
-                      "Searching for a driver...",
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
+                child: SizedBox(
+                  width: double.infinity, // Ensures full width
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment
+                        .center, // Optional: centers content horizontally
+                    children: [
+                      const CupertinoActivityIndicator(radius: 22),
+                      const SizedBox(height: 20),
+                      const Text(
+                        "Searching for a driver...",
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      "Estimated wait time: ${counter.value} seconds",
-                      style: const TextStyle(
-                        fontSize: 14,
+                      const SizedBox(height: 12),
+                      Text(
+                        "Estimated wait time: ${counter.value} seconds",
+                        style: const TextStyle(
+                          fontSize: 14,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               );
             } else {
@@ -375,7 +384,7 @@ class RideRequestPage extends HookConsumerWidget {
 
   Drawer _buildSideNavBar(BuildContext context) {
     return Drawer(
-      backgroundColor: const Color(0xFFF5F5F5),
+      backgroundColor: const Color.fromARGB(255, 255, 255, 255),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.only(
             topRight: Radius.circular(30), bottomRight: Radius.circular(30)),
@@ -387,9 +396,8 @@ class RideRequestPage extends HookConsumerWidget {
             child: Row(
               children: [
                 const CircleAvatar(
-                    radius: 30,
-                    backgroundImage:
-                        AssetImage('lib/shared/assets/avatar.png')),
+                    radius: 40,
+                    backgroundImage: AssetImage('lib/shared/assets/user.png')),
                 const SizedBox(width: 12),
                 const Expanded(
                   child: Text("John Doe",
@@ -406,64 +414,73 @@ class RideRequestPage extends HookConsumerWidget {
             child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               children: [
-                _drawerCard(
-                    icon: CupertinoIcons.time,
-                    label: "Trip Orders",
-                    onTap: () {
-                      Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (context) => const OrderHistoryPage()));
-                    }),
-                _drawerCard(
-                    icon: CupertinoIcons.tag,
-                    label: "Discounts",
-                    onTap: () {
-                      Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (context) => const DiscountPage()));
-                    }),
-                _drawerCard(
-                    icon: CupertinoIcons.lock,
-                    label: "Privacy Policy",
-                    onTap: () {}),
-                _drawerCard(
-                    icon: CupertinoIcons.doc_text,
-                    label: "Terms & Conditions",
-                    onTap: () {}),
+                _simpleDrawerItem(
+                  icon: CupertinoIcons.time,
+                  label: "Trip Orders",
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const OrderHistoryPage(),
+                      ),
+                    );
+                  },
+                ),
+                _simpleDrawerItem(
+                  icon: CupertinoIcons.tag,
+                  label: "Discounts",
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const DiscountPage(),
+                      ),
+                    );
+                  },
+                ),
+                _simpleDrawerItem(
+                  icon: CupertinoIcons.lock,
+                  label: "Privacy Policy",
+                  onTap: () {},
+                ),
+                _simpleDrawerItem(
+                  icon: CupertinoIcons.doc_text,
+                  label: "Terms & Conditions",
+                  onTap: () {},
+                ),
                 const SizedBox(height: 20),
-                _drawerCard(
-                    icon: CupertinoIcons.square_arrow_right,
-                    label: "Logout",
-                    iconColor: Colors.red,
-                    textColor: Colors.red,
-                    onTap: () {}),
+                _simpleDrawerItem(
+                  icon: CupertinoIcons.square_arrow_right,
+                  label: "Logout",
+                  iconColor: Colors.red,
+                  textColor: Colors.red,
+                  onTap: () {},
+                ),
               ],
             ),
-          ),
+          )
         ],
       ),
     );
   }
 
-  Widget _drawerCard({
+  Widget _simpleDrawerItem({
     required IconData icon,
     required String label,
     required VoidCallback onTap,
-    Color iconColor = const Color(0xFF555555),
-    Color textColor = Colors.black,
+    Color iconColor = const Color.fromARGB(255, 42, 42, 43),
+    Color textColor = const Color.fromARGB(255, 42, 42, 43),
   }) {
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      elevation: 1,
-      color: Colors.white,
-      child: ListTile(
-        leading: Icon(icon, color: iconColor),
-        title: Text(label, style: TextStyle(color: textColor, fontSize: 16)),
-        onTap: onTap,
-      ),
+    return Column(
+      children: [
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(icon, color: iconColor),
+          title: Text(label, style: TextStyle(color: textColor)),
+          onTap: onTap,
+        ),
+        const Divider(), // Adds underline
+      ],
     );
   }
 
