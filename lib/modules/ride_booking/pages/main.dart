@@ -5,7 +5,10 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 
+import '../providers/ride_request_provider.dart';
 import 'discount_page.dart';
 import 'order_history_page.dart';
 
@@ -17,10 +20,12 @@ class RideRequestPage extends HookConsumerWidget {
     final pickupController =
         useTextEditingController(text: 'Fetching location...');
     final destinationController = useTextEditingController();
+    final userPosition = useState<LatLng?>(null);
+    final destinationPosition = useState<LatLng?>(null);
+    final polylinePoints = useState<List<LatLng>>([]);
 
-    // Use effect to fetch location once
     useEffect(() {
-      Future<void> setLocation() async {
+      Future<void> fetchLocation() async {
         try {
           bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
           if (!serviceEnabled) {
@@ -42,12 +47,12 @@ class RideRequestPage extends HookConsumerWidget {
             return;
           }
 
-          final position = await Geolocator.getCurrentPosition(
-              desiredAccuracy: LocationAccuracy.high);
+          final position = await Geolocator.getCurrentPosition();
+          userPosition.value = LatLng(position.latitude, position.longitude);
+
           final placemarks = await placemarkFromCoordinates(
               position.latitude, position.longitude);
           final place = placemarks.first;
-
           pickupController.text =
               '${place.street}, ${place.locality}, ${place.country}';
         } catch (e) {
@@ -55,7 +60,7 @@ class RideRequestPage extends HookConsumerWidget {
         }
       }
 
-      setLocation();
+      fetchLocation();
       return null;
     }, []);
 
@@ -63,12 +68,69 @@ class RideRequestPage extends HookConsumerWidget {
       drawer: _buildSideNavBar(context),
       body: Stack(
         children: [
-          Positioned.fill(
-            child: Image.asset(
-              'lib/shared/assets/maps.jpg',
-              fit: BoxFit.cover,
-            ),
-          ),
+          userPosition.value == null
+              ? const Center(child: CircularProgressIndicator())
+              : FlutterMap(
+                  options: MapOptions(
+                    center: userPosition.value,
+                    zoom: 15.0,
+                    onTap: (tapPosition, point) async {
+                      // Set tapped point as destination
+                      destinationPosition.value = point;
+
+                      try {
+                        final placemarks = await placemarkFromCoordinates(
+                            point.latitude, point.longitude);
+                        final place = placemarks.first;
+                        destinationController.text =
+                            '${place.street}, ${place.locality}, ${place.country}';
+                      } catch (e) {
+                        destinationController.text = 'Unknown location';
+                      }
+
+                      // Update polyline from user to destination
+                      if (userPosition.value != null) {
+                        polylinePoints.value = [userPosition.value!, point];
+                      }
+                    },
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate:
+                          'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      subdomains: ['a', 'b', 'c'],
+                    ),
+                    MarkerLayer(
+                      markers: [
+                        Marker(
+                          width: 50.0,
+                          height: 50.0,
+                          point: userPosition.value!,
+                          builder: (ctx) => const Icon(Icons.location_pin,
+                              color: Colors.red, size: 40),
+                        ),
+                        if (destinationPosition.value != null)
+                          Marker(
+                            width: 50.0,
+                            height: 50.0,
+                            point: destinationPosition.value!,
+                            builder: (ctx) => const Icon(Icons.flag,
+                                color: Colors.blue, size: 40),
+                          ),
+                      ],
+                    ),
+                    PolylineLayer(
+                      polylines: [
+                        if (polylinePoints.value.isNotEmpty)
+                          Polyline(
+                            points: polylinePoints.value,
+                            strokeWidth: 4.0,
+                            color: Colors.orange,
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
           SafeArea(
             child: Padding(
               padding:
@@ -78,31 +140,11 @@ class RideRequestPage extends HookConsumerWidget {
                   Builder(
                     builder: (context) => GestureDetector(
                       onTap: () => Scaffold.of(context).openDrawer(),
-                      child: Container(
-                        width: 55,
-                        height: 55,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Center(
-                          child: Icon(CupertinoIcons.bars,
-                              size: 28, color: Color(0xFF555555)),
-                        ),
-                      ),
+                      child: _iconContainer(CupertinoIcons.bars),
                     ),
                   ),
                   const Spacer(),
-                  Container(
-                    width: 55,
-                    height: 55,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(CupertinoIcons.bell,
-                        color: Color(0xFF555555)),
-                  ),
+                  _iconContainer(CupertinoIcons.bell),
                 ],
               ),
             ),
@@ -120,63 +162,39 @@ class RideRequestPage extends HookConsumerWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _iconBox(CupertinoIcons.location),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text('Pickup',
-                                  style: TextStyle(
-                                      fontSize: 12, color: Colors.grey)),
-                              const SizedBox(height: 4),
-                              TextField(
-                                controller: pickupController,
-                                decoration: const InputDecoration(
-                                  border: InputBorder.none,
-                                  isDense: true,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        _rotatedSwapIcon(),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        _iconBox(CupertinoIcons.flag),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text('Destination',
-                                  style: TextStyle(
-                                      fontSize: 12, color: Colors.grey)),
-                              const SizedBox(height: 4),
-                              TextField(
-                                controller: destinationController,
-                                decoration: const InputDecoration(
-                                  hintText: 'Enter destination',
-                                  border: InputBorder.none,
-                                  isDense: true,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
+                    _locationInputRow(pickupController, destinationController),
                     const SizedBox(height: 24),
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: () => _showAvailableCars(context),
+                        onPressed: () async {
+                          try {
+                            List<Location> locations =
+                                await locationFromAddress(
+                                    destinationController.text);
+                            if (locations.isNotEmpty) {
+                              final dest = LatLng(locations.first.latitude,
+                                  locations.first.longitude);
+                              destinationPosition.value = dest;
+                              polylinePoints.value = [
+                                userPosition.value!,
+                                dest
+                              ];
+                            }
+                          } catch (e) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                  content: Text('Invalid destination: $e')),
+                            );
+                          }
+
+                          _showAvailableCars(
+                            context,
+                            ref,
+                            pickupController.text,
+                            destinationController.text,
+                          );
+                        },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFFFFA500),
                           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -187,10 +205,9 @@ class RideRequestPage extends HookConsumerWidget {
                         child: const Text(
                           'Search Car',
                           style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white),
                         ),
                       ),
                     ),
@@ -204,7 +221,51 @@ class RideRequestPage extends HookConsumerWidget {
     );
   }
 
-  void _showAvailableCars(BuildContext context) {
+  Widget _locationInputRow(TextEditingController pickupController,
+      TextEditingController destinationController) {
+    return Column(
+      children: [
+        Row(
+          children: [
+            _iconBox(CupertinoIcons.location),
+            const SizedBox(width: 12),
+            Expanded(
+              child: TextField(
+                controller: pickupController,
+                decoration: const InputDecoration(
+                  labelText: 'Pickup',
+                  border: InputBorder.none,
+                  isDense: true,
+                ),
+              ),
+            ),
+            _rotatedSwapIcon(),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            _iconBox(CupertinoIcons.flag),
+            const SizedBox(width: 12),
+            Expanded(
+              child: TextField(
+                controller: destinationController,
+                decoration: const InputDecoration(
+                  labelText: 'Destination',
+                  hintText: 'Enter destination',
+                  border: InputBorder.none,
+                  isDense: true,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  void _showAvailableCars(
+      BuildContext context, WidgetRef ref, String pickup, String destination) {
     final cars = [
       {
         'name': 'Economy',
@@ -246,21 +307,16 @@ class RideRequestPage extends HookConsumerWidget {
               const Text("Available Cars",
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 10),
-              ...cars.map(
-                (car) => ListTile(
-                  leading: Image.asset(
-                    car['icon'] as String,
-                    width: 65,
-                    height: 65,
-                  ),
-                  title: Text(car['name'] as String),
-                  subtitle: Text('${car['seats']} • ETA: ${car['eta']}'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showSearchingBottomSheet(context, car['name'] as String);
-                  },
-                ),
-              ),
+              ...cars.map((car) => ListTile(
+                    leading: Image.asset(car['icon']!, width: 60),
+                    title: Text(car['name']!),
+                    subtitle: Text('${car['seats']} • ETA: ${car['eta']}'),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _showSearchingBottomSheet(
+                          context, ref, pickup, destination, car['name']!);
+                    },
+                  )),
             ],
           ),
         );
@@ -268,7 +324,8 @@ class RideRequestPage extends HookConsumerWidget {
     );
   }
 
-  void _showSearchingBottomSheet(BuildContext context, String carName) {
+  void _showSearchingBottomSheet(BuildContext context, WidgetRef ref,
+      String pickup, String destination, String carName) {
     showModalBottomSheet(
       context: context,
       isDismissible: false,
@@ -298,32 +355,17 @@ class RideRequestPage extends HookConsumerWidget {
             if (!showDriver.value) {
               return Padding(
                 padding: const EdgeInsets.all(16),
-                child: SizedBox(
-                  width: double.infinity, // Ensures full width
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment
-                        .center, // Optional: centers content horizontally
-                    children: [
-                      const CupertinoActivityIndicator(radius: 22),
-                      const SizedBox(height: 20),
-                      const Text(
-                        "Searching for a driver...",
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CupertinoActivityIndicator(radius: 22),
+                    const SizedBox(height: 20),
+                    const Text("Searching for a driver...",
                         style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        "Estimated wait time: ${counter.value} seconds",
-                        style: const TextStyle(
-                          fontSize: 14,
-                        ),
-                      ),
-                    ],
-                  ),
+                            fontSize: 18, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 12),
+                    Text("Estimated wait time: ${counter.value} seconds"),
+                  ],
                 ),
               );
             } else {
@@ -338,9 +380,8 @@ class RideRequestPage extends HookConsumerWidget {
                     const SizedBox(height: 12),
                     ListTile(
                       leading: const CircleAvatar(
-                        backgroundImage:
-                            AssetImage('lib/shared/assets/driver_avatar.png'),
-                      ),
+                          backgroundImage: AssetImage(
+                              'lib/shared/assets/driver_avatar.png')),
                       title: const Text("Alex Johnson"),
                       subtitle: const Text("Arriving in 3 minutes"),
                       trailing: const Icon(CupertinoIcons.phone),
@@ -350,26 +391,40 @@ class RideRequestPage extends HookConsumerWidget {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                                content: Text(
-                                    "$carName has been successfully booked!")),
-                          );
+                        onPressed: () async {
+                          final service = ref.read(rideRequestServiceProvider);
+                          try {
+                            await service.sendRideRequest(
+                              pickupLocation: pickup,
+                              destination: destination,
+                              carType: carName,
+                            );
+                            Navigator.pop(context);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                  content:
+                                      Text('$carName booked successfully!')),
+                            );
+                          } catch (e) {
+                            Navigator.pop(context);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Booking failed: $e')),
+                            );
+                          }
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFFFFA500),
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
+                              borderRadius: BorderRadius.circular(12)),
                         ),
-                        child: const Text('Confirm',
-                            style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white)),
+                        child: const Text(
+                          'Confirm',
+                          style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white),
+                        ),
                       ),
                     ),
                   ],
@@ -382,105 +437,14 @@ class RideRequestPage extends HookConsumerWidget {
     );
   }
 
-  Drawer _buildSideNavBar(BuildContext context) {
-    return Drawer(
-      backgroundColor: const Color.fromARGB(255, 255, 255, 255),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.only(
-            topRight: Radius.circular(30), bottomRight: Radius.circular(30)),
-      ),
-      child: Column(
-        children: [
-          DrawerHeader(
-            decoration: const BoxDecoration(color: Color(0xFFFFA500)),
-            child: Row(
-              children: [
-                const CircleAvatar(
-                    radius: 40,
-                    backgroundImage: AssetImage('lib/shared/assets/user.png')),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Text("John Doe",
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 24),
-                      overflow: TextOverflow.ellipsis),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              children: [
-                _simpleDrawerItem(
-                  icon: CupertinoIcons.time,
-                  label: "Trip Orders",
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const OrderHistoryPage(),
-                      ),
-                    );
-                  },
-                ),
-                _simpleDrawerItem(
-                  icon: CupertinoIcons.tag,
-                  label: "Discounts",
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const DiscountPage(),
-                      ),
-                    );
-                  },
-                ),
-                _simpleDrawerItem(
-                  icon: CupertinoIcons.lock,
-                  label: "Privacy Policy",
-                  onTap: () {},
-                ),
-                _simpleDrawerItem(
-                  icon: CupertinoIcons.doc_text,
-                  label: "Terms & Conditions",
-                  onTap: () {},
-                ),
-                const SizedBox(height: 20),
-                _simpleDrawerItem(
-                  icon: CupertinoIcons.square_arrow_right,
-                  label: "Logout",
-                  iconColor: Colors.red,
-                  textColor: Colors.red,
-                  onTap: () {},
-                ),
-              ],
-            ),
-          )
-        ],
-      ),
-    );
-  }
-
-  Widget _simpleDrawerItem({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-    Color iconColor = const Color.fromARGB(255, 42, 42, 43),
-    Color textColor = const Color.fromARGB(255, 42, 42, 43),
-  }) {
-    return Column(
-      children: [
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: Icon(icon, color: iconColor),
-          title: Text(label, style: TextStyle(color: textColor)),
-          onTap: onTap,
-        ),
-        const Divider(), // Adds underline
-      ],
+  Widget _iconContainer(IconData icon) {
+    return Container(
+      width: 55,
+      height: 55,
+      decoration: BoxDecoration(
+          color: Colors.white, borderRadius: BorderRadius.circular(10)),
+      child:
+          Center(child: Icon(icon, size: 28, color: const Color(0xFF555555))),
     );
   }
 
@@ -492,9 +456,8 @@ class RideRequestPage extends HookConsumerWidget {
         color: const Color.fromARGB(255, 245, 245, 245),
         borderRadius: BorderRadius.circular(10),
       ),
-      child: Center(
-        child: Icon(icon, color: const Color(0xFF555555), size: 28),
-      ),
+      child:
+          Center(child: Icon(icon, size: 28, color: const Color(0xFF555555))),
     );
   }
 
@@ -510,6 +473,77 @@ class RideRequestPage extends HookConsumerWidget {
         child: Icon(CupertinoIcons.arrow_up_arrow_down,
             color: Colors.grey, size: 28),
       ),
+    );
+  }
+
+  Drawer _buildSideNavBar(BuildContext context) {
+    return Drawer(
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.only(
+          topRight: Radius.circular(30),
+          bottomRight: Radius.circular(30),
+        ),
+      ),
+      child: Column(
+        children: [
+          DrawerHeader(
+            decoration: const BoxDecoration(color: Color(0xFFFFA500)),
+            child: Row(
+              children: const [
+                CircleAvatar(
+                    radius: 40,
+                    backgroundImage: AssetImage('lib/shared/assets/user.png')),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text("John Doe",
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              children: [
+                _drawerItem(
+                    context,
+                    CupertinoIcons.time,
+                    'Trip Orders',
+                    () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (context) => const OrderHistoryPage()))),
+                _drawerItem(
+                    context,
+                    CupertinoIcons.cart,
+                    'Promotions',
+                    () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (context) => const DiscountPage()))),
+                _drawerItem(
+                    context, CupertinoIcons.settings, 'Settings', () {}),
+                _drawerItem(context, CupertinoIcons.question, 'Help', () {}),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _drawerItem(
+      BuildContext context, IconData icon, String title, VoidCallback onTap) {
+    return ListTile(
+      leading: Icon(icon, color: Colors.grey),
+      title: Text(title,
+          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+      onTap: () {
+        Navigator.pop(context);
+        onTap();
+      },
     );
   }
 }

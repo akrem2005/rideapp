@@ -9,6 +9,9 @@ import 'package:geocoding/geocoding.dart';
 import '../providers/driver_state_provider.dart';
 import '../models/ride_request_model.dart';
 
+import '../services/location_service.dart';
+import '../providers/location_service_provider.dart';
+
 enum RideStatus { none, accepted, enRoute, pickedUp, completed }
 
 final rideStatusProvider = StateProvider<RideStatus>((ref) => RideStatus.none);
@@ -62,12 +65,28 @@ class DriverConsolePage extends HookConsumerWidget {
               Switch(
                 activeColor: Colors.orange,
                 value: isOnline,
-                onChanged: (value) {
-                  ref.read(isDriverOnlineProvider.notifier).state = value;
-                  ref.read(rideStatusProvider.notifier).state = RideStatus.none;
+                onChanged: (value) async {
                   if (value) {
-                    _simulateRideRequest(ref);
+                    final currentPos = await _getCurrentLocation();
+                    final success = await ref
+                        .read(locationServiceProvider)
+                        .sendLocation(currentPos);
+
+                    if (success) {
+                      ref.read(isDriverOnlineProvider.notifier).state = true;
+                      ref.read(rideStatusProvider.notifier).state =
+                          RideStatus.none;
+                      _simulateRideRequest(ref);
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('Failed to send location to server')),
+                      );
+                    }
                   } else {
+                    ref.read(isDriverOnlineProvider.notifier).state = false;
+                    ref.read(rideStatusProvider.notifier).state =
+                        RideStatus.none;
                     ref.read(incomingRideRequestProvider.notifier).state = null;
                   }
                 },
