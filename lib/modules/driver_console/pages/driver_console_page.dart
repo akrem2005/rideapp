@@ -27,6 +27,7 @@ class DriverConsolePage extends HookConsumerWidget {
     final mapController = useMemoized(() => MapController());
     final position = useState<LatLng?>(null);
     final pickupPosition = useState<LatLng?>(null);
+    final driverId = '001';
 
     // Get driver location and geocode pickup when ride request updates
     useEffect(() {
@@ -62,15 +63,20 @@ class DriverConsolePage extends HookConsumerWidget {
             children: [
               const Text("Online",
                   style: TextStyle(fontWeight: FontWeight.w500)),
+              // Replace with actual user ID from login/session
+              // Ideally from ParseUser.currentUser()
+
               Switch(
                 activeColor: Colors.orange,
                 value: isOnline,
                 onChanged: (value) async {
+                  final locationService =
+                      ref.read(locationServiceProvider(driverId));
+
                   if (value) {
                     final currentPos = await _getCurrentLocation();
-                    final success = await ref
-                        .read(locationServiceProvider)
-                        .sendLocation(currentPos);
+                    final success =
+                        await locationService.sendLocation(currentPos);
 
                     if (success) {
                       ref.read(isDriverOnlineProvider.notifier).state = true;
@@ -84,13 +90,23 @@ class DriverConsolePage extends HookConsumerWidget {
                       );
                     }
                   } else {
+                    final success = await locationService.deleteLocation();
+
                     ref.read(isDriverOnlineProvider.notifier).state = false;
                     ref.read(rideStatusProvider.notifier).state =
                         RideStatus.none;
                     ref.read(incomingRideRequestProvider.notifier).state = null;
+
+                    if (!success) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('Failed to delete location')),
+                      );
+                    }
                   }
                 },
               ),
+
               const SizedBox(width: 12),
             ],
           ),
