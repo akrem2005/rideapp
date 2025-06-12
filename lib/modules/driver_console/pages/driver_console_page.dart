@@ -1,0 +1,628 @@
+import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
+import '../models/ride_request_model.dart';
+import '../models/driver_location_model.dart';
+import '../../auth/pages/get_started_page.dart';
+
+const String back4appBaseUrl = 'https://parseapi.back4app.com';
+const String appId = "jU5yWVbYCi4B44T5SncVHDitWJhnzR1P9dKmo73y";
+const String restApiKey = "hoH5efGxj37mG5fj3MQq2nDxXceK3VVsoW9csD5z";
+
+enum RideStatus { none, incoming, accepted, enRoute, pickedUp, completed }
+
+final rideStatusProvider = StateProvider<RideStatus>((ref) => RideStatus.none);
+final isDriverOnlineProvider = StateProvider<bool>((ref) => false);
+
+class DriverConsolePage extends HookConsumerWidget {
+  const DriverConsolePage({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isOnline = ref.watch(isDriverOnlineProvider);
+    final rideStatus = ref.watch(rideStatusProvider);
+    final mapController = useMemoized(() => MapController());
+    final position = useState<LatLng?>(null);
+    final pickupPosition = useState<LatLng?>(null);
+    final rideRequest = useState<RideRequest?>(null);
+    final driverId = useState<String?>(null);
+    final timer = useRef<Timer?>(null);
+    final carType = useState<String>('Economy');
+
+    useEffect(() {
+      Future<void> initialize() async {
+        final prefs = await SharedPreferences.getInstance();
+        driverId.value = prefs.getString('driverObjectId') ??
+            'driver_${DateTime.now().millisecondsSinceEpoch}';
+        await prefs.setString('driverObjectId', driverId.value!);
+
+        final pos = await _getCurrentLocation(context);
+        position.value = pos;
+        if (pos != null) {
+          mapController.move(pos, 15.0);
+        }
+
+        if (isOnline) {
+          await _updateDriverLocation(
+              context, driverId.value!, position.value!, true, carType.value);
+        }
+      }
+
+      initialize();
+
+      return () {
+        timer.value?.cancel();
+      };
+    }, [isOnline]);
+
+    useEffect(() {
+      if (isOnline && driverId.value != null) {
+        timer.value = Timer.periodic(const Duration(seconds: 10), (_) {
+          _pollRideRequests(
+              context, ref, driverId.value!, rideRequest, pickupPosition);
+          if (position.value != null) {
+            _updateDriverLocation(
+                context, driverId.value!, position.value!, true, carType.value);
+          }
+        });
+      } else {
+        timer.value?.cancel();
+      }
+      return null;
+    }, [isOnline, driverId.value]);
+
+    if (position.value == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 1,
+        title: const Text("Driver Console"),
+        actions: [
+          Row(
+            children: [
+              const Text("Online",
+                  style: TextStyle(fontWeight: FontWeight.w500)),
+              Switch(
+                activeColor: Colors.orange,
+                value: isOnline,
+                onChanged: (value) async {
+                  if (driverId.value == null || position.value == null) return;
+                  ref.read(isDriverOnlineProvider.notifier).state = value;
+                  if (value) {
+                    await _updateDriverLocation(context, driverId.value!,
+                        position.value!, true, carType.value);
+                    _pollRideRequests(context, ref, driverId.value!,
+                        rideRequest, pickupPosition);
+                  } else {
+                    await _updateDriverLocation(context, driverId.value!,
+                        position.value!, false, carType.value);
+                    ref.read(rideStatusProvider.notifier).state =
+                        RideStatus.none;
+                    rideRequest.value = null;
+                    pickupPosition.value = null;
+                    timer.value?.cancel();
+                  }
+                },
+              ),
+              const SizedBox(width: 12),
+            ],
+          ),
+        ],
+      ),
+      drawer: _buildDrawer(context),
+      body: Stack(
+        children: [
+          FlutterMap(
+            mapController: mapController,
+            options: MapOptions(
+              center: position.value!,
+              zoom: 15.0,
+              maxZoom: 18,
+              minZoom: 3,
+            ),
+            children: [
+              TileLayer(
+                urlTemplate:
+                    "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                subdomains: const ['a', 'b', 'c'],
+                userAgentPackageName: 'com.example.ride_app',
+              ),
+              MarkerLayer(
+                markers: [
+                  if (position.value != null)
+                    Marker(
+                      point: position.value!,
+                      width: 40,
+                      height: 40,
+                      builder: (ctx) => const Icon(Icons.my_location,
+                          color: Colors.blue, size: 30),
+                    ),
+                  if (pickupPosition.value != null)
+                    Marker(
+                      point: pickupPosition.value!,
+                      width: 50,
+                      height: 50,
+                      builder: (ctx) => const Icon(Icons.location_pin,
+                          color: Colors.red, size: 40),
+                    ),
+                ],
+              ),
+            ],
+          ),
+          if (rideStatus != RideStatus.none && rideRequest.value != null)
+            _rideBottomSheet(context, ref, rideRequest.value!, driverId.value!,
+                rideRequest, pickupPosition),
+        ],
+      ),
+    );
+  }
+
+  Drawer _buildDrawer(BuildContext context) {
+    return Drawer(
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.only(
+          topRight: Radius.circular(30),
+          bottomRight: Radius.circular(30),
+        ),
+      ),
+      child: Column(
+        children: [
+          DrawerHeader(
+            decoration: const BoxDecoration(color: Color(0xFFFFA500)),
+            child: Row(
+              children: const [
+                CircleAvatar(
+                    radius: 40,
+                    backgroundImage: AssetImage('lib/shared/assets/user.png')),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text("John Doe",
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              children: [
+                _drawerItem(context, CupertinoIcons.time, 'Trip Orders', () {}),
+                _drawerItem(context, CupertinoIcons.cart, 'Promotions', () {}),
+                _drawerItem(
+                    context, CupertinoIcons.settings, 'Settings', () {}),
+                _drawerItem(context, CupertinoIcons.question, 'Help', () {}),
+                _drawerItem(context, CupertinoIcons.arrow_left_circle, 'Logout',
+                    () => logout(context)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _drawerItem(
+      BuildContext context, IconData icon, String title, VoidCallback onTap) {
+    return ListTile(
+      leading: Icon(icon, color: Colors.grey),
+      title: Text(title,
+          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+      onTap: () {
+        Navigator.pop(context);
+        onTap();
+      },
+    );
+  }
+
+  Widget _rideBottomSheet(
+    BuildContext context,
+    WidgetRef ref,
+    RideRequest request,
+    String driverId,
+    ValueNotifier<RideRequest?> rideRequest,
+    ValueNotifier<LatLng?> pickupPosition,
+  ) {
+    final rideStatus = ref.watch(rideStatusProvider);
+
+    String statusText;
+    String nextButtonText;
+    RideStatus? nextState;
+    bool showRejectButton = rideStatus == RideStatus.incoming;
+
+    switch (rideStatus) {
+      case RideStatus.incoming:
+        statusText = "New Ride Request";
+        nextButtonText = "Accept";
+        nextState = RideStatus.accepted;
+        break;
+      case RideStatus.accepted:
+        statusText = "Navigating to pickup...";
+        nextButtonText = "Start Ride";
+        nextState = RideStatus.enRoute;
+        break;
+      case RideStatus.enRoute:
+        statusText = "Rider picked up. Heading to destination...";
+        nextButtonText = "Picked Up";
+        nextState = RideStatus.pickedUp;
+        break;
+      case RideStatus.pickedUp:
+        statusText = "Almost there...";
+        nextButtonText = "Complete Ride";
+        nextState = RideStatus.completed;
+        break;
+      case RideStatus.completed:
+        statusText = "Ride Completed!";
+        nextButtonText = "Finish";
+        nextState = null;
+        break;
+      default:
+        statusText = "";
+        nextButtonText = "";
+        nextState = null;
+    }
+
+    return Positioned(
+      bottom: 0,
+      left: 0,
+      right: 0,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 10)],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 5,
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                    color: Colors.grey[400],
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+            Text("Ride Info", style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 12),
+            _infoRow("Rider ID", request.riderId),
+            _infoRow("Pickup", request.pickup),
+            _infoRow("Destination", request.destination),
+            _infoRow("Car Type", request.carType),
+            _infoRow("Requested At", request.createdAt.toString()),
+            const SizedBox(height: 16),
+            Text(statusText, style: const TextStyle(color: Colors.black54)),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                if (showRejectButton)
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () async {
+                        if (request.id == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                                content:
+                                    Text('Error: Ride request ID is missing')),
+                          );
+                          return;
+                        }
+                        try {
+                          final rejectJson = {
+                            'requestId': request.id!,
+                            'driverId': driverId,
+                          };
+                          print('Reject Ride Request Payload: $rejectJson');
+                          await _rejectRideRequest(
+                              context, driverId, request.id!);
+                          ref.read(rideStatusProvider.notifier).state =
+                              RideStatus.none;
+                          rideRequest.value = null;
+                          pickupPosition.value = null;
+                        } catch (e) {
+                          print('Error rejecting ride: $e');
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Error rejecting ride: $e')),
+                          );
+                        }
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text("Reject",
+                          style: TextStyle(fontSize: 16, color: Colors.white)),
+                    ),
+                  ),
+                if (showRejectButton) const SizedBox(width: 10),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      if (request.id == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                              content:
+                                  Text('Error: Ride request ID is missing')),
+                        );
+                        return;
+                      }
+                      try {
+                        if (nextState == RideStatus.accepted) {
+                          final updateJson = {
+                            'status': 'accepted',
+                            'assignedDriverId': driverId, // Send as String
+                          };
+                          print('Accept Ride Request Payload: $updateJson');
+                          final response = await http.put(
+                            Uri.parse(
+                                '$back4appBaseUrl/classes/RideRequest/${request.id}'),
+                            headers: {
+                              'X-Parse-Application-Id': appId,
+                              'X-Parse-REST-API-Key': restApiKey,
+                              'Content-Type': 'application/json',
+                            },
+                            body: jsonEncode(updateJson),
+                          );
+                          if (response.statusCode != 200) {
+                            final errorBody = jsonDecode(response.body);
+                            print('Accept Ride Error: $errorBody');
+                            throw Exception(
+                                'Failed to accept ride: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
+                          }
+                          print(
+                              'Accept Ride Response: ${jsonDecode(response.body)}');
+                        }
+                        if (nextState == null) {
+                          ref.read(rideStatusProvider.notifier).state =
+                              RideStatus.none;
+                          rideRequest.value = null;
+                          pickupPosition.value = null;
+                        } else {
+                          ref.read(rideStatusProvider.notifier).state =
+                              nextState;
+                        }
+                      } catch (e) {
+                        print('Error updating ride status: $e');
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                              content: Text('Error updating ride status: $e')),
+                        );
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      elevation: 2,
+                    ),
+                    child: Text(nextButtonText,
+                        style:
+                            const TextStyle(fontSize: 16, color: Colors.white)),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _infoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Text("$label: ",
+              style:
+                  const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+          Expanded(
+              child: Text(value,
+                  style: const TextStyle(fontSize: 16, color: Colors.black54))),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _updateDriverLocation(
+    BuildContext context,
+    String driverId,
+    LatLng position,
+    bool isOnline,
+    String carType,
+  ) async {
+    final driverLocation = DriverLocation(
+      driverId: driverId,
+      latitude: position.latitude,
+      longitude: position.longitude,
+      updatedAt: DateTime.now().toUtc(),
+      carType: carType,
+      isOnline: isOnline,
+    );
+
+    try {
+      final requestJson = driverLocation.toJson();
+      print('DriverLocation JSON Payload: $requestJson');
+      final response = await http.post(
+        Uri.parse('$back4appBaseUrl/classes/DriverLocation'),
+        headers: {
+          'X-Parse-Application-Id': appId,
+          'X-Parse-REST-API-Key': restApiKey,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(requestJson),
+      );
+
+      if (response.statusCode != 201) {
+        final errorBody = jsonDecode(response.body);
+        print('Update Driver Location Error: $errorBody');
+        throw Exception(
+            'Failed to update driver location: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
+      }
+      print('Update Driver Location Response: ${jsonDecode(response.body)}');
+    } catch (e) {
+      print('Error updating driver location: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error updating driver location: $e')),
+      );
+    }
+  }
+
+  Future<void> _pollRideRequests(
+    BuildContext context,
+    WidgetRef ref,
+    String driverId,
+    ValueNotifier<RideRequest?> rideRequest,
+    ValueNotifier<LatLng?> pickupPosition,
+  ) async {
+    try {
+      final queryJson = {
+        "assignedDriverId": driverId, // Use String for query
+        "status": "pending",
+      };
+      print('Poll Ride Requests Query: $queryJson');
+      final response = await http.get(
+        Uri.parse(
+            '$back4appBaseUrl/classes/RideRequest?where=${Uri.encodeComponent(jsonEncode(queryJson))}'),
+        headers: {
+          'X-Parse-Application-Id': appId,
+          'X-Parse-REST-API-Key': restApiKey,
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        print('Poll Ride Requests Response: $data');
+        if (data['results'] != null && data['results'].isNotEmpty) {
+          final requestData = data['results'][0];
+          rideRequest.value = RideRequest.fromJson({
+            'objectId': requestData['objectId'],
+            'riderId': requestData['riderId']['objectId'],
+            'pickup': requestData['pickup'],
+            'destination': requestData['destination'],
+            'carType': requestData['carType'],
+            'pickupLatitude': requestData['pickupLatitude'],
+            'pickupLongitude': requestData['pickupLongitude'],
+            'createdAt': requestData['createdAt']['iso'],
+          });
+          pickupPosition.value = LatLng(
+              requestData['pickupLatitude'], requestData['pickupLongitude']);
+          ref.read(rideStatusProvider.notifier).state = RideStatus.incoming;
+        }
+      } else {
+        final errorBody = jsonDecode(response.body);
+        print('Poll Ride Requests Error: $errorBody');
+        throw Exception(
+            'Failed to poll ride requests: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
+      }
+    } catch (e) {
+      print('Error polling rides: $e');
+      // Avoid showing SnackBar repeatedly during polling
+    }
+  }
+
+  Future<void> _rejectRideRequest(
+      BuildContext context, String driverId, String objectId) async {
+    try {
+      final requestJson = {
+        'requestId': objectId,
+        'driverId': driverId,
+      };
+      print('Reject Ride Request Payload: $requestJson');
+      final response = await http.post(
+        Uri.parse('$back4appBaseUrl/functions/rejectRideRequest'),
+        headers: {
+          'X-Parse-Application-Id': appId,
+          'X-Parse-REST-API-Key': restApiKey,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(requestJson),
+      );
+
+      if (response.statusCode != 200) {
+        final errorBody = jsonDecode(response.body);
+        print('Reject Ride Request Error: $errorBody');
+        throw Exception(
+            'Failed to reject ride request: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
+      }
+      print('Reject Ride Request Response: ${jsonDecode(response.body)}');
+    } catch (e) {
+      print('Error rejecting ride: $e');
+      throw Exception('Error rejecting ride: $e');
+    }
+  }
+
+  Future<LatLng?> _getCurrentLocation(BuildContext context) async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please enable location services')),
+        );
+        return null;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location permission denied')),
+          );
+          return null;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Location permission permanently denied')),
+        );
+        return null;
+      }
+
+      final position = await Geolocator.getCurrentPosition();
+      return LatLng(position.latitude, position.longitude);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error getting location: $e')),
+      );
+      return null;
+    }
+  }
+
+  Future<void> logout(BuildContext context) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('driverObjectId');
+      Navigator.pushReplacement(context,
+          MaterialPageRoute(builder: (context) => const GetStartedPage()));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error logging out: $e')),
+      );
+    }
+  }
+}
