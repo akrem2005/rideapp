@@ -10,7 +10,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
-import '../../driver_console/models/ride_request_model.dart';
+import '../model/ride_request_model.dart';
 import 'discount_page.dart';
 import '../../auth/pages/get_started_page.dart';
 import 'order_history_page.dart';
@@ -614,7 +614,6 @@ class RideRequestPage extends HookConsumerWidget {
         final requestJson = {
           ...request.toJson(),
           'status': 'pending',
-          'assignedDriverId': null,
           'riderId': {
             '__type': 'Pointer',
             'className': '_User',

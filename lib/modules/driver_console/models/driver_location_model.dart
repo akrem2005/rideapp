@@ -16,7 +16,7 @@ class DriverLocation {
   });
 
   Map<String, dynamic> toJson() => {
-        'driverId': driverId, // Send as String, not Pointer<_User>
+        'driverId': driverId,
         'latitude': latitude,
         'longitude': longitude,
         'updatedAt': {
@@ -28,10 +28,13 @@ class DriverLocation {
       };
 
   factory DriverLocation.fromJson(Map<String, dynamic> json) => DriverLocation(
-        driverId: json['driverId'] is Map ? json['driverId']['objectId'] : json['driverId'],
+        driverId: json['driverId'] is Map
+            ? json['driverId']['objectId']
+            : json['driverId'],
         latitude: json['latitude']?.toDouble(),
         longitude: json['longitude']?.toDouble(),
-        updatedAt: DateTime.parse(json['updatedAt']['iso'] ?? json['updatedAt']),
+        updatedAt:
+            DateTime.parse(json['updatedAt']['iso'] ?? json['updatedAt']),
         carType: json['carType'],
         isOnline: json['isOnline'],
       );
