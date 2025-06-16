@@ -1,12 +1,13 @@
 class RideRequest {
-  final String? objectId; // Optional for new requests
+  final String? objectId;
   final String riderId;
   final String pickup;
   final String destination;
   final String carType;
   final double pickupLatitude;
   final double pickupLongitude;
-  final String createdAt; // Use String to match API response
+  final String createdAt;
+  final String? assignedDriverId; // Add this field
 
   RideRequest({
     this.objectId,
@@ -17,6 +18,7 @@ class RideRequest {
     required this.pickupLatitude,
     required this.pickupLongitude,
     required this.createdAt,
+    this.assignedDriverId,
   });
 
   factory RideRequest.fromJson(Map<String, dynamic> json) {
@@ -28,7 +30,9 @@ class RideRequest {
       carType: json['carType'] as String,
       pickupLatitude: (json['pickupLatitude'] as num).toDouble(),
       pickupLongitude: (json['pickupLongitude'] as num).toDouble(),
-      createdAt: json['createdAt'] as String, // Handle as string
+      createdAt: json['createdAt'] as String,
+      assignedDriverId: json['assignedDriverId']?['objectId']
+          as String?, // Extract objectId from pointer
     );
   }
 
@@ -42,6 +46,12 @@ class RideRequest {
       'pickupLatitude': pickupLatitude,
       'pickupLongitude': pickupLongitude,
       'createdAt': createdAt,
+      if (assignedDriverId != null)
+        'assignedDriverId': {
+          '__type': 'Pointer',
+          'className': '_User',
+          'objectId': assignedDriverId,
+        },
     };
   }
 }

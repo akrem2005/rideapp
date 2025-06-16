@@ -38,6 +38,7 @@ class DriverConsolePage extends HookConsumerWidget {
     final carType = useState<String>('Economy');
     final isToggling = useState<bool>(false);
 
+    // Initialize driver ID and location
     useEffect(() {
       Future<void> initialize() async {
         final prefs = await SharedPreferences.getInstance();
@@ -59,9 +60,18 @@ class DriverConsolePage extends HookConsumerWidget {
       };
     }, []);
 
+    // Manage polling for ride requests
     useEffect(() {
       if (isOnline && driverId.value != null && position.value != null) {
-        timer.value = Timer.periodic(const Duration(seconds: 10), (_) async {
+        // Cancel any existing timer
+        timer.value?.cancel();
+
+        // Start polling immediately
+        _pollRideRequests(
+            context, ref, driverId.value!, rideRequest, pickupPosition);
+
+        // Set up periodic polling every 5 seconds (reduced from 15 for faster response)
+        timer.value = Timer.periodic(const Duration(seconds: 5), (_) async {
           await _pollRideRequests(
               context, ref, driverId.value!, rideRequest, pickupPosition);
           await _updateDriverLocation(
@@ -69,7 +79,9 @@ class DriverConsolePage extends HookConsumerWidget {
         });
       } else {
         timer.value?.cancel();
+        timer.value = null;
       }
+
       return () => timer.value?.cancel();
     }, [isOnline, driverId.value, position.value]);
 
@@ -117,14 +129,13 @@ class DriverConsolePage extends HookConsumerWidget {
                           );
                           ref.read(isDriverOnlineProvider.notifier).state =
                               value;
+
                           if (!value) {
+                            // Clear ride state when going offline
                             ref.read(rideStatusProvider.notifier).state =
                                 RideStatus.none;
                             rideRequest.value = null;
                             pickupPosition.value = null;
-                          } else {
-                            await _pollRideRequests(context, ref,
-                                driverId.value!, rideRequest, pickupPosition);
                           }
                         } catch (e) {
                           print('Toggle error: $e');
@@ -185,6 +196,27 @@ class DriverConsolePage extends HookConsumerWidget {
           if (rideStatus != RideStatus.none && rideRequest.value != null)
             _rideBottomSheet(context, ref, rideRequest.value!, driverId.value!,
                 rideRequest, pickupPosition),
+          if (isOnline && rideStatus == RideStatus.none)
+            Positioned(
+              bottom: 20,
+              left: 20,
+              right: 20,
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.9),
+                  borderRadius: BorderRadius.circular(8),
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black26, blurRadius: 4),
+                  ],
+                ),
+                child: const Text(
+                  "Waiting for ride requests...",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 16, color: Colors.black54),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -346,11 +378,6 @@ class DriverConsolePage extends HookConsumerWidget {
                           return;
                         }
                         try {
-                          final rejectJson = {
-                            'requestId': request.objectId!,
-                            'driverId': driverId,
-                          };
-                          print('Reject Ride Request Payload: $rejectJson');
                           await _rejectRideRequest(
                               context, driverId, request.objectId!);
                           ref.read(rideStatusProvider.notifier).state =
@@ -390,7 +417,11 @@ class DriverConsolePage extends HookConsumerWidget {
                         if (nextState == RideStatus.accepted) {
                           final updateJson = {
                             'status': 'accepted',
-                            'assignedDriverId': driverId,
+                            'assignedDriverId': {
+                              '__type': 'Pointer',
+                              'className': '_User',
+                              'objectId': driverId,
+                            },
                           };
                           print('Accept Ride Request Payload: $updateJson');
                           final response = await http.put(
@@ -424,8 +455,7 @@ class DriverConsolePage extends HookConsumerWidget {
                       } catch (e) {
                         print('Error updating ride status: $e');
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                              content: Text('Error updating ride status: $e')),
+                          SnackBar(content: Text('Error updating status: $e')),
                         );
                       }
                     },
@@ -574,8 +604,26 @@ class DriverConsolePage extends HookConsumerWidget {
     ValueNotifier<LatLng?> pickupPosition,
   ) async {
     try {
+      // Query for pending or accepted rides assigned to this driver
       final queryJson = {
-        "status": "pending",
+        "\$or": [
+          {
+            "status": "pending",
+            "assignedDriverId": {
+              "__type": "Pointer",
+              "className": "_User",
+              "objectId": driverId
+            }
+          },
+          {
+            "status": "accepted",
+            "assignedDriverId": {
+              "__type": "Pointer",
+              "className": "_User",
+              "objectId": driverId
+            }
+          }
+        ]
       };
       print('Poll Ride Requests Query: $queryJson');
       final response = await http.get(
@@ -592,19 +640,63 @@ class DriverConsolePage extends HookConsumerWidget {
         print('Poll Ride Requests Response: $data');
         if (data['results'] != null && data['results'].isNotEmpty) {
           final requestData = data['results'][0];
-          rideRequest.value = RideRequest.fromJson({
-            'objectId': requestData['objectId'],
-            'riderId': requestData['riderId']['objectId'],
-            'pickup': requestData['pickup'],
-            'destination': requestData['destination'],
-            'carType': requestData['carType'],
-            'pickupLatitude': requestData['pickupLatitude'],
-            'pickupLongitude': requestData['pickupLongitude'],
-            'createdAt': requestData['createdAt'], // Use the string directly
-          });
-          pickupPosition.value = LatLng(
-              requestData['pickupLatitude'], requestData['pickupLongitude']);
-          ref.read(rideStatusProvider.notifier).state = RideStatus.incoming;
+          print('Processing ride request: $requestData');
+          try {
+            final newRideRequest = RideRequest.fromJson({
+              'objectId': requestData['objectId'],
+              'riderId': requestData['riderId']?['objectId'] ?? 'Unknown',
+              'pickup': requestData['pickup'] ?? 'Unknown',
+              'destination': requestData['destination'] ?? 'Unknown',
+              'carType': requestData['carType'] ?? 'Unknown',
+              'pickupLatitude':
+                  requestData['pickupLatitude']?.toDouble() ?? 0.0,
+              'pickupLongitude':
+                  requestData['pickupLongitude']?.toDouble() ?? 0.0,
+              'createdAt': requestData['createdAt'] ?? '',
+            });
+
+            // Only update if it's a new or different ride request
+            if (rideRequest.value == null ||
+                rideRequest.value!.objectId != newRideRequest.objectId) {
+              rideRequest.value = newRideRequest;
+              pickupPosition.value = LatLng(
+                requestData['pickupLatitude']?.toDouble() ?? 0.0,
+                requestData['pickupLongitude']?.toDouble() ?? 0.0,
+              );
+
+              // Set ride status based on backend status
+              final status = requestData['status'];
+              print('Ride status from backend: $status');
+              if (status == 'pending') {
+                ref.read(rideStatusProvider.notifier).state =
+                    RideStatus.incoming;
+              } else if (status == 'accepted') {
+                ref.read(rideStatusProvider.notifier).state =
+                    RideStatus.accepted;
+              } else {
+                print('Unexpected ride status: $status');
+                ref.read(rideStatusProvider.notifier).state = RideStatus.none;
+                rideRequest.value = null;
+                pickupPosition.value = null;
+              }
+            }
+          } catch (e) {
+            print('Error parsing ride request: $e');
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Error parsing ride request: $e')),
+            );
+          }
+        } else {
+          print('No ride requests found for driverId: $driverId');
+          // Clear ride request if none found and current status is incoming or accepted
+          if (rideRequest.value != null &&
+              [RideStatus.incoming, RideStatus.accepted]
+                  .contains(ref.read(rideStatusProvider))) {
+            print('Clearing stale ride request');
+            rideRequest.value = null;
+            pickupPosition.value = null;
+            ref.read(rideStatusProvider.notifier).state = RideStatus.none;
+          }
         }
       } else {
         final errorBody = jsonDecode(response.body);
@@ -614,7 +706,12 @@ class DriverConsolePage extends HookConsumerWidget {
       }
     } catch (e) {
       print('Error polling rides: $e');
-      // Avoid showing SnackBar repeatedly during polling
+      // Show error only if no ride is currently active to avoid spamming
+      if (rideRequest.value == null && ref.read(isDriverOnlineProvider)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error polling rides: $e')),
+        );
+      }
     }
   }
 
