@@ -37,6 +37,7 @@ class DriverConsolePage extends HookConsumerWidget {
     final timer = useRef<Timer?>(null);
     final carType = useState<String>('Economy');
     final isToggling = useState<bool>(false);
+    final isPolling = useState<bool>(false);
 
     // Initialize driver ID and location
     useEffect(() {
@@ -62,28 +63,50 @@ class DriverConsolePage extends HookConsumerWidget {
 
     // Manage polling for ride requests
     useEffect(() {
-      if (isOnline && driverId.value != null && position.value != null) {
-        // Cancel any existing timer
+      if (!isOnline || driverId.value == null || position.value == null) {
         timer.value?.cancel();
-
-        // Start polling immediately
-        _pollRideRequests(
-            context, ref, driverId.value!, rideRequest, pickupPosition);
-
-        // Set up periodic polling every 5 seconds (reduced from 15 for faster response)
-        timer.value = Timer.periodic(const Duration(seconds: 5), (_) async {
-          await _pollRideRequests(
-              context, ref, driverId.value!, rideRequest, pickupPosition);
-          await _updateDriverLocation(
-              context, driverId.value!, position.value!, true, carType.value);
-        });
-      } else {
-        timer.value?.cancel();
-        timer.value = null;
+        isPolling.value = false;
+        return null;
       }
 
-      return () => timer.value?.cancel();
-    }, [isOnline, driverId.value, position.value]);
+      if (isPolling.value) return null; // Prevent duplicate polling
+
+      isPolling.value = true;
+      timer.value?.cancel(); // Cancel any existing timer
+
+      Future<void> poll() async {
+        try {
+          await _pollRideRequests(context, ref, driverId.value!, rideRequest,
+              pickupPosition, carType.value);
+          await _updateDriverLocation(context, driverId.value!, position.value!,
+              isOnline, carType.value);
+        } catch (e) {
+          print('Polling error: $e');
+          if (rideRequest.value == null && ref.read(isDriverOnlineProvider)) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Polling error: $e')),
+            );
+          }
+        }
+      }
+
+      // Start polling immediately
+      poll();
+
+      // Set up periodic polling
+      timer.value = Timer.periodic(const Duration(seconds: 5), (_) async {
+        if (!isPolling.value) {
+          timer.value?.cancel();
+          return;
+        }
+        await poll();
+      });
+
+      return () {
+        timer.value?.cancel();
+        isPolling.value = false;
+      };
+    }, [isOnline, driverId.value, position.value, carType.value]);
 
     if (position.value == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
@@ -136,6 +159,8 @@ class DriverConsolePage extends HookConsumerWidget {
                                 RideStatus.none;
                             rideRequest.value = null;
                             pickupPosition.value = null;
+                            timer.value?.cancel();
+                            isPolling.value = false;
                           }
                         } catch (e) {
                           print('Toggle error: $e');
@@ -359,7 +384,7 @@ class DriverConsolePage extends HookConsumerWidget {
             _infoRow("Pickup", request.pickup),
             _infoRow("Destination", request.destination),
             _infoRow("Car Type", request.carType),
-            _infoRow("Requested At", request.createdAt.toString()),
+            _infoRow("Requested At", request.createdAt),
             const SizedBox(height: 16),
             Text(statusText, style: const TextStyle(color: Colors.black54)),
             const SizedBox(height: 20),
@@ -527,13 +552,13 @@ class DriverConsolePage extends HookConsumerWidget {
 
       if (queryResponse.statusCode != 200) {
         final errorBody = jsonDecode(queryResponse.body);
-        print('Query DriverLocation Error: $errorBody');
+        print('Query Driver Error: $errorBody');
         throw Exception(
             'Failed to query driver location: ${errorBody['error'] ?? 'Unknown error'} (Code: ${queryResponse.statusCode})');
       }
 
       final queryData = jsonDecode(queryResponse.body);
-      print('Query DriverLocation Response: $queryData');
+      print('Query Driver Response: $queryData');
 
       if (queryData['results'] != null && queryData['results'].isNotEmpty) {
         // Update existing record
@@ -561,12 +586,11 @@ class DriverConsolePage extends HookConsumerWidget {
 
         if (updateResponse.statusCode != 200) {
           final errorBody = jsonDecode(updateResponse.body);
-          print('Update DriverLocation Error: $errorBody');
+          print('Update Driver Error: $errorBody');
           throw Exception(
               'Failed to update driver location: ${errorBody['error'] ?? 'Unknown error'} (Code: ${updateResponse.statusCode})');
         }
-        print(
-            'Update DriverLocation Response: ${jsonDecode(updateResponse.body)}');
+        print('Update Driver Response: ${jsonDecode(updateResponse.body)}');
       } else {
         // Create new record if none exists
         final createJson = driverLocation.toJson();
@@ -583,16 +607,15 @@ class DriverConsolePage extends HookConsumerWidget {
 
         if (createResponse.statusCode != 201) {
           final errorBody = jsonDecode(createResponse.body);
-          print('Create DriverLocation Error: $errorBody');
+          print('Create Driver Error: $errorBody');
           throw Exception(
               'Failed to create driver location: ${errorBody['error'] ?? 'Unknown error'} (Code: ${createResponse.statusCode})');
         }
-        print(
-            'Create DriverLocation Response: ${jsonDecode(createResponse.body)}');
+        print('Create Driver Response: ${jsonDecode(createResponse.body)}');
       }
     } catch (e) {
       print('Error updating driver location: $e');
-      throw e; // Rethrow for toggle error handling
+      throw e;
     }
   }
 
@@ -602,13 +625,20 @@ class DriverConsolePage extends HookConsumerWidget {
     String driverId,
     ValueNotifier<RideRequest?> rideRequest,
     ValueNotifier<LatLng?> pickupPosition,
+    String carType,
   ) async {
     try {
-      // Query for pending or accepted rides assigned to this driver
+      // Query for pending or accepted rides
       final queryJson = {
         "\$or": [
           {
             "status": "pending",
+            "carType": carType,
+            "assignedDriverId": null, // Unassigned pending requests
+          },
+          {
+            "status": "pending",
+            "carType": carType,
             "assignedDriverId": {
               "__type": "Pointer",
               "className": "_User",
@@ -641,54 +671,42 @@ class DriverConsolePage extends HookConsumerWidget {
         if (data['results'] != null && data['results'].isNotEmpty) {
           final requestData = data['results'][0];
           print('Processing ride request: $requestData');
-          try {
-            final newRideRequest = RideRequest.fromJson({
-              'objectId': requestData['objectId'],
-              'riderId': requestData['riderId']?['objectId'] ?? 'Unknown',
-              'pickup': requestData['pickup'] ?? 'Unknown',
-              'destination': requestData['destination'] ?? 'Unknown',
-              'carType': requestData['carType'] ?? 'Unknown',
-              'pickupLatitude':
-                  requestData['pickupLatitude']?.toDouble() ?? 0.0,
-              'pickupLongitude':
-                  requestData['pickupLongitude']?.toDouble() ?? 0.0,
-              'createdAt': requestData['createdAt'] ?? '',
-            });
-
-            // Only update if it's a new or different ride request
-            if (rideRequest.value == null ||
-                rideRequest.value!.objectId != newRideRequest.objectId) {
-              rideRequest.value = newRideRequest;
-              pickupPosition.value = LatLng(
-                requestData['pickupLatitude']?.toDouble() ?? 0.0,
+          final newRideRequest = RideRequest.fromJson({
+            'objectId': requestData['objectId'] ?? '',
+            'riderId': requestData['riderId']?['objectId'] ?? 'Unknown',
+            'pickup': requestData['pickup'] ?? 'Unknown',
+            'destination': requestData['destination'] ?? 'Unknown',
+            'carType': requestData['carType'] ?? 'Unknown',
+            'pickupLatitude': requestData['pickupLatitude']?.toDouble() ?? 0.0,
+            'pickupLongitude':
                 requestData['pickupLongitude']?.toDouble() ?? 0.0,
-              );
+            'createdAt': requestData['createdAt']?.toString() ??
+                DateTime.now().toUtc().toIso8601String(),
+          });
 
-              // Set ride status based on backend status
-              final status = requestData['status'];
-              print('Ride status from backend: $status');
-              if (status == 'pending') {
-                ref.read(rideStatusProvider.notifier).state =
-                    RideStatus.incoming;
-              } else if (status == 'accepted') {
-                ref.read(rideStatusProvider.notifier).state =
-                    RideStatus.accepted;
-              } else {
-                print('Unexpected ride status: $status');
-                ref.read(rideStatusProvider.notifier).state = RideStatus.none;
-                rideRequest.value = null;
-                pickupPosition.value = null;
-              }
-            }
-          } catch (e) {
-            print('Error parsing ride request: $e');
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Error parsing ride request: $e')),
-            );
+          // Always update state to ensure UI reflects latest data
+          rideRequest.value = newRideRequest;
+          pickupPosition.value = LatLng(
+            requestData['pickupLatitude']?.toDouble() ?? 0.0,
+            requestData['pickupLongitude']?.toDouble() ?? 0.0,
+          );
+
+          // Set status based on backend
+          final status = requestData['status'];
+          print('Ride status from backend: $status');
+          if (status == 'pending') {
+            ref.read(rideStatusProvider.notifier).state = RideStatus.incoming;
+          } else if (status == 'accepted') {
+            ref.read(rideStatusProvider.notifier).state = RideStatus.accepted;
+          } else {
+            print('Unexpected ride status: $status');
+            ref.read(rideStatusProvider.notifier).state = RideStatus.none;
+            rideRequest.value = null;
+            pickupPosition.value = null;
           }
         } else {
           print('No ride requests found for driverId: $driverId');
-          // Clear ride request if none found and current status is incoming or accepted
+          // Clear stale ride request
           if (rideRequest.value != null &&
               [RideStatus.incoming, RideStatus.accepted]
                   .contains(ref.read(rideStatusProvider))) {
@@ -700,13 +718,12 @@ class DriverConsolePage extends HookConsumerWidget {
         }
       } else {
         final errorBody = jsonDecode(response.body);
-        print('Poll Ride Requests Error: $errorBody');
+        print('Poll error: $errorBody');
         throw Exception(
-            'Failed to poll ride requests: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
+            'Error polling rides: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
       }
     } catch (e) {
       print('Error polling rides: $e');
-      // Show error only if no ride is currently active to avoid spamming
       if (rideRequest.value == null && ref.read(isDriverOnlineProvider)) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error polling rides: $e')),
@@ -718,31 +735,29 @@ class DriverConsolePage extends HookConsumerWidget {
   Future<void> _rejectRideRequest(
       BuildContext context, String driverId, String objectId) async {
     try {
-      final requestJson = {
-        'requestId': objectId,
-        'driverId': driverId,
-      };
-      print('Reject Ride Request Payload: $requestJson');
-      final response = await http.post(
-        Uri.parse('$back4appBaseUrl/functions/rejectRideRequest'),
+      final response = await http.put(
+        Uri.parse('$back4appBaseUrl/classes/RideRequest/$objectId'),
         headers: {
           'X-Parse-Application-Id': appId,
           'X-Parse-REST-API-Key': restApiKey,
           'Content-Type': 'application/json',
         },
-        body: jsonEncode(requestJson),
+        body: jsonEncode({
+          'status': 'rejected',
+          'assignedDriverId': null,
+        }),
       );
 
       if (response.statusCode != 200) {
         final errorBody = jsonDecode(response.body);
-        print('Reject Ride Request Error: $errorBody');
+        print('Reject Ride Error: $errorBody');
         throw Exception(
-            'Failed to reject ride request: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
+            'Failed to reject ride: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
       }
-      print('Reject Ride Request Response: ${jsonDecode(response.body)}');
+      print('Reject Ride Response: ${jsonDecode(response.body)}');
     } catch (e) {
       print('Error rejecting ride: $e');
-      throw Exception('Error rejecting ride: $e');
+      throw Exception('Failed to reject ride: $e');
     }
   }
 
@@ -769,8 +784,7 @@ class DriverConsolePage extends HookConsumerWidget {
 
       if (permission == LocationPermission.deniedForever) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Location permission permanently denied')),
+          const SnackBar(content: Text('Permissions permanently denied')),
         );
         return null;
       }
@@ -778,6 +792,7 @@ class DriverConsolePage extends HookConsumerWidget {
       final position = await Geolocator.getCurrentPosition();
       return LatLng(position.latitude, position.longitude);
     } catch (e) {
+      print('Error getting location: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error getting location: $e')),
       );
