@@ -15,14 +15,222 @@ import 'discount_page.dart';
 import '../../auth/pages/get_started_page.dart';
 import 'order_history_page.dart';
 
+// Constants
 const String back4appBaseUrl = 'https://parseapi.back4app.com';
 const String appId = "jU5yWVbYCi4B44T5SncVHDitWJhnzR1P9dKmo73y";
 const String restApiKey = "hoH5efGxj37mG5fj3MQq2nDxXceK3VVsoW9csD5z";
 
+// Riverpod Providers
+final rideRequestServiceProvider = Provider<RideRequestService>((ref) {
+  return RideRequestService();
+});
+
+final locationServiceProvider = Provider<LocationService>((ref) {
+  return LocationService();
+});
+
+final fareProvider = StateProvider<Map<String, double>>((ref) => {});
+
+final userPositionProvider = StateProvider<LatLng?>((ref) => null);
+final destinationPositionProvider = StateProvider<LatLng?>((ref) => null);
+final polylinePointsProvider = StateProvider<List<LatLng>>((ref) => []);
+
+// Services
+class RideRequestService {
+  Future<void> submitRideRequest({
+    required BuildContext context,
+    required String carType,
+    required String pickup,
+    required String destination,
+    required LatLng pickupPosition,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final riderId = prefs.getString('userObjectId') ??
+        'rider_${DateTime.now().millisecondsSinceEpoch}';
+    await prefs.setString('userObjectId', riderId);
+
+    final request = RideRequest(
+      riderId: riderId,
+      pickup: pickup,
+      destination: destination,
+      carType: carType,
+      pickupLatitude: pickupPosition.latitude,
+      pickupLongitude: pickupPosition.longitude,
+      createdAt: DateTime.now().toUtc(),
+    );
+
+    try {
+      final requestJson = {
+        ...request.toJson(),
+        'status': 'pending',
+        'riderId': {
+          '__type': 'Pointer',
+          'className': '_User',
+          'objectId': riderId,
+        },
+      };
+      print('RideRequest JSON Payload: $requestJson');
+
+      final createResponse = await http.post(
+        Uri.parse('$back4appBaseUrl/classes/RideRequest'),
+        headers: {
+          'X-Parse-Application-Id': appId,
+          'X-Parse-REST-API-Key': restApiKey,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(requestJson),
+      );
+
+      if (createResponse.statusCode != 201) {
+        final errorBody = jsonDecode(createResponse.body);
+        print('Create Response Error: $errorBody');
+        throw Exception(
+            'Failed to create ride request: ${errorBody['error'] ?? 'Unknown error'} (Code: ${createResponse.statusCode})');
+      }
+
+      final createdObject = jsonDecode(createResponse.body);
+      print('Create Response: $createdObject');
+      final objectId = createdObject['objectId'];
+
+      if (objectId == null || objectId is! String || objectId.isEmpty) {
+        throw Exception(
+            'Invalid or missing objectId in create response: $createdObject');
+      }
+
+      final assignJson = {
+        'requestId': objectId,
+        'carType': carType,
+      };
+      print('Assign Ride Request Payload: $assignJson');
+      final assignResponse = await http.post(
+        Uri.parse('$back4appBaseUrl/functions/assignRideRequest'),
+        headers: {
+          'X-Parse-Application-Id': appId,
+          'X-Parse-REST-API-Key': restApiKey,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(assignJson),
+      );
+
+      if (assignResponse.statusCode != 200) {
+        final errorBody = jsonDecode(assignResponse.body);
+        print('Assign Response Error: $errorBody');
+        throw Exception(
+            'Failed to assign driver: ${errorBody['error'] ?? 'Unknown error'} (Code: ${assignResponse.statusCode})');
+      }
+
+      print('Assign Response: ${jsonDecode(assignResponse.body)}');
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ride request submitted successfully')),
+      );
+    } catch (e) {
+      print('Error submitting ride request: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Error submitting ride request: ${e.toString()}')),
+      );
+      rethrow;
+    }
+  }
+}
+
+class LocationService {
+  Future<void> fetchCurrentLocation({
+    required BuildContext context,
+    required TextEditingController pickupController,
+    required StateController<LatLng?> userPosition,
+  }) async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        pickupController.text = 'Location service disabled';
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please enable location services')),
+        );
+        return;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          pickupController.text = 'Permission denied';
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location permission denied')),
+          );
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        pickupController.text = 'Permission permanently denied';
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Location permission permanently denied')),
+        );
+        return;
+      }
+
+      final position = await Geolocator.getCurrentPosition();
+      userPosition.state = LatLng(position.latitude, position.longitude);
+
+      final placemarks =
+          await placemarkFromCoordinates(position.latitude, position.longitude);
+      final place = placemarks.first;
+      pickupController.text =
+          '${place.street}, ${place.locality}, ${place.country}';
+    } catch (e) {
+      pickupController.text = 'Location unavailable';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error fetching location: $e')),
+      );
+    }
+  }
+
+  Future<void> calculateEstimatedFare({
+    required BuildContext context,
+    required StateController<LatLng?> userPosition,
+    required StateController<LatLng?> destinationPosition,
+    required StateController<Map<String, double>> fareState,
+  }) async {
+    if (userPosition.state == null || destinationPosition.state == null) return;
+
+    try {
+      double distanceMeters = Geolocator.distanceBetween(
+        userPosition.state!.latitude,
+        userPosition.state!.longitude,
+        destinationPosition.state!.latitude,
+        destinationPosition.state!.longitude,
+      );
+
+      double distanceKm = distanceMeters / 1000.0;
+
+      final fareRates = {
+        'Economy': {'base': 120.0, 'perKm': 10.0},
+        'Basic': {'base': 140.0, 'perKm': 12.0},
+        'Executive': {'base': 180.0, 'perKm': 15.0},
+        'Minivan': {'base': 200.0, 'perKm': 18.0},
+      };
+
+      final fares = <String, double>{};
+      fareRates.forEach((type, rate) {
+        double total = rate['base']! + (rate['perKm']! * distanceKm);
+        fares[type] = total;
+      });
+
+      fareState.state = fares;
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error calculating fare: $e')),
+      );
+    }
+  }
+}
+
 class RideRequestPage extends HookConsumerWidget {
   const RideRequestPage({super.key});
 
-  // Helper function declarations before build method
   Widget _buildSideNavBar(BuildContext context) {
     return Drawer(
       shape: const RoundedRectangleBorder(
@@ -82,13 +290,13 @@ class RideRequestPage extends HookConsumerWidget {
                   context,
                   CupertinoIcons.settings,
                   'Settings',
-                  () {}, // Add settings navigation logic
+                  () {},
                 ),
                 _drawerItem(
                   context,
                   CupertinoIcons.question,
                   'Help',
-                  () {}, // Add help navigation logic
+                  () {},
                 ),
                 _drawerItem(
                   context,
@@ -219,40 +427,36 @@ class RideRequestPage extends HookConsumerWidget {
     );
   }
 
-  void _showAvailableCars(
-    BuildContext context,
-    WidgetRef ref,
-    String pickup,
-    String destination,
-    Map<String, double> fares,
-    Future<void> Function(String) submitRideRequest,
-  ) {
+  void _showAvailableCars({
+    required BuildContext context,
+    required WidgetRef ref,
+    required String pickup,
+    required String destination,
+    required Map<String, double> fares,
+  }) {
     final cars = [
       {
         'name': 'Economy',
         'seats': '4 seats',
-        'icon':
-            'lib/shared/assets/economy.png', // Replace with actual asset path
+        'icon': 'lib/shared/assets/economy.png',
         'eta': '5-10 mins',
       },
       {
         'name': 'Basic',
         'seats': '4 seats',
-        'icon': 'lib/shared/assets/basic.png', // Replace with actual asset path
+        'icon': 'lib/shared/assets/basic.png',
         'eta': '6-12 mins',
       },
       {
         'name': 'Executive',
         'seats': '4 seats',
-        'icon':
-            'lib/shared/assets/executive.png', // Replace with actual asset path
+        'icon': 'lib/shared/assets/executive.png',
         'eta': '4-8 mins',
       },
       {
         'name': 'Minivan',
         'seats': '6 seats',
-        'icon':
-            'lib/shared/assets/minivan.png', // Replace with actual asset path
+        'icon': 'lib/shared/assets/minivan.png',
         'eta': '10-15 mins',
       },
     ];
@@ -283,9 +487,31 @@ class RideRequestPage extends HookConsumerWidget {
                       "${car['seats']} • ETA: ${car['eta']} • Estimated Fare: $fare Birr"),
                   onTap: () async {
                     Navigator.pop(context);
-                    await submitRideRequest(name);
+                    final userPosition = ref.read(userPositionProvider);
+                    if (userPosition == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('Pickup location not available')),
+                      );
+                      return;
+                    }
+                    await ref
+                        .read(rideRequestServiceProvider)
+                        .submitRideRequest(
+                          context: context,
+                          carType: name,
+                          pickup: pickup,
+                          destination: destination,
+                          pickupPosition: userPosition,
+                        );
                     _showSearchingBottomSheet(
-                        context, ref, pickup, destination, name, fares);
+                      context: context,
+                      ref: ref,
+                      pickup: pickup,
+                      destination: destination,
+                      carType: name,
+                      fares: fares,
+                    );
                   },
                 );
               }).toList(),
@@ -296,14 +522,14 @@ class RideRequestPage extends HookConsumerWidget {
     );
   }
 
-  void _showSearchingBottomSheet(
-    BuildContext context,
-    WidgetRef ref,
-    String pickup,
-    String destination,
-    String carType,
-    Map<String, double> fares,
-  ) {
+  void _showSearchingBottomSheet({
+    required BuildContext context,
+    required WidgetRef ref,
+    required String pickup,
+    required String destination,
+    required String carType,
+    required Map<String, double> fares,
+  }) {
     showModalBottomSheet(
       context: context,
       isDismissible: false,
@@ -323,7 +549,8 @@ class RideRequestPage extends HookConsumerWidget {
               Timer.periodic(const Duration(seconds: 1), (timer) {
                 if (counter.value == 0) {
                   timer.cancel();
-                  step.value = 'arriving';
+                  final random = DateTime.now().millisecond % 2 == 0;
+                  step.value = random ? 'accepted' : 'rejected';
                 } else {
                   counter.value--;
                 }
@@ -331,59 +558,113 @@ class RideRequestPage extends HookConsumerWidget {
               return null;
             }, []);
 
-            if (step.value == 'searching') {
-              return _buildStatusSheet(
-                context,
-                "Searching for a driver...",
-                const CupertinoActivityIndicator(radius: 22),
-                "Estimated wait time: ${counter.value} seconds",
-              );
+            switch (step.value) {
+              case 'searching':
+                return _buildStatusSheet(
+                  context: context,
+                  title: "Searching for a driver...",
+                  icon: const CupertinoActivityIndicator(radius: 22),
+                  subtitle: "Estimated wait time: ${counter.value} seconds",
+                  cancelAction: () {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Ride request cancelled')),
+                    );
+                  },
+                );
+              case 'rejected':
+                return _buildStatusSheet(
+                  context: context,
+                  title: "No Drivers Available",
+                  icon: const Icon(CupertinoIcons.exclamationmark_circle,
+                      size: 44, color: Colors.red),
+                  subtitle:
+                      "No drivers found. Try again or select another car type.",
+                  cancelAction: () {
+                    Navigator.pop(context);
+                    _showAvailableCars(
+                      context: context,
+                      ref: ref,
+                      pickup: pickup,
+                      destination: destination,
+                      fares: fares,
+                    );
+                  },
+                  cancelText: "Try Again",
+                );
+              case 'accepted':
+                return _buildRideStatus(
+                  title: "Driver Accepted",
+                  subtitle: "Alex Johnson • 3 minutes away",
+                  buttonText: "Start Ride",
+                  onPressed: () => step.value = 'on_ride',
+                  icon: const Icon(CupertinoIcons.checkmark_circle,
+                      size: 44, color: Colors.green),
+                );
+              case 'on_ride':
+                return _buildRideStatus(
+                  title: "On Ride",
+                  subtitle: "Enjoy your trip to $destination",
+                  buttonText: "Finish Ride",
+                  onPressed: () => step.value = 'completed',
+                  icon: const Icon(CupertinoIcons.car_detailed,
+                      size: 44, color: Color(0xFFFFA500)),
+                );
+              case 'completed':
+                return _buildPaymentSheet(context, totalFare);
+              default:
+                return const SizedBox.shrink();
             }
-
-            if (step.value == 'arriving') {
-              return _buildRideStatus(
-                title: "Driver Arriving",
-                subtitle: "Alex Johnson • 3 minutes away",
-                buttonText: "Start Ride",
-                onPressed: () => step.value = 'on_ride',
-              );
-            }
-
-            if (step.value == 'on_ride') {
-              return _buildRideStatus(
-                title: "On Ride",
-                subtitle: "Enjoy your trip to $destination",
-                buttonText: "Finish Ride",
-                onPressed: () => step.value = 'completed',
-              );
-            }
-
-            if (step.value == 'completed') {
-              return _buildPaymentSheet(context, totalFare);
-            }
-
-            return const SizedBox.shrink();
           },
         );
       },
     );
   }
 
-  Widget _buildStatusSheet(
-      BuildContext context, String title, Widget loader, String subtitle) {
+  Widget _buildStatusSheet({
+    required BuildContext context,
+    required String title,
+    required Widget icon,
+    required String subtitle,
+    VoidCallback? cancelAction,
+    String? cancelText,
+  }) {
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          loader,
+          icon,
           const SizedBox(height: 20),
           Text(
             title,
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
-          Text(subtitle),
+          Text(subtitle, textAlign: TextAlign.center),
+          if (cancelAction != null) ...[
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: cancelAction,
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Colors.grey),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: Text(
+                  cancelText ?? "Cancel",
+                  style: const TextStyle(
+                    fontSize: 16,
+                    color: Colors.grey,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -394,12 +675,15 @@ class RideRequestPage extends HookConsumerWidget {
     required String subtitle,
     required String buttonText,
     required VoidCallback onPressed,
+    required Widget icon,
   }) {
     return Padding(
       padding: const EdgeInsets.all(24),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          icon,
+          const SizedBox(height: 20),
           Text(
             title,
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -407,8 +691,8 @@ class RideRequestPage extends HookConsumerWidget {
           const SizedBox(height: 12),
           ListTile(
             leading: const CircleAvatar(
-              backgroundImage: AssetImage(
-                  'lib/shared/assets/driver_avatar.png'), // Replace with actual asset path
+              backgroundImage:
+                  AssetImage('lib/shared/assets/driver_avatar.png'),
             ),
             title: const Text("Alex Johnson"),
             subtitle: Text(subtitle),
@@ -446,6 +730,9 @@ class RideRequestPage extends HookConsumerWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          const Icon(CupertinoIcons.checkmark_alt_circle,
+              size: 44, color: Colors.green),
+          const SizedBox(height: 20),
           const Text(
             "Ride Completed!",
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -492,285 +779,110 @@ class RideRequestPage extends HookConsumerWidget {
     final pickupController =
         useTextEditingController(text: 'Fetching location...');
     final destinationController = useTextEditingController();
-    final userPosition = useState<LatLng?>(null);
-    final destinationPosition = useState<LatLng?>(null);
-    final polylinePoints = useState<List<LatLng>>([]);
-    final estimatedFare = useState<Map<String, double>>({});
     final mapController = useMemoized(() => MapController(), []);
 
-    final fareRates = {
-      'Economy': {'base': 120.0, 'perKm': 10.0},
-      'Basic': {'base': 140.0, 'perKm': 12.0},
-      'Executive': {'base': 180.0, 'perKm': 15.0},
-      'Minivan': {'base': 200.0, 'perKm': 18.0},
-    };
-
     useEffect(() {
-      Future<void> fetchLocation() async {
-        try {
-          bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-          if (!serviceEnabled) {
-            pickupController.text = 'Location service disabled';
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Please enable location services')),
-            );
-            return;
-          }
-
-          LocationPermission permission = await Geolocator.checkPermission();
-          if (permission == LocationPermission.denied) {
-            permission = await Geolocator.requestPermission();
-            if (permission == LocationPermission.denied) {
-              pickupController.text = 'Permission denied';
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Location permission denied')),
-              );
-              return;
-            }
-          }
-
-          if (permission == LocationPermission.deniedForever) {
-            pickupController.text = 'Permission permanently denied';
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                  content: Text('Location permission permanently denied')),
-            );
-            return;
-          }
-
-          final position = await Geolocator.getCurrentPosition();
-          userPosition.value = LatLng(position.latitude, position.longitude);
-
-          final placemarks = await placemarkFromCoordinates(
-              position.latitude, position.longitude);
-          final place = placemarks.first;
-          pickupController.text =
-              '${place.street}, ${place.locality}, ${place.country}';
-        } catch (e) {
-          pickupController.text = 'Location unavailable';
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error fetching location: $e')),
+      ref.read(locationServiceProvider).fetchCurrentLocation(
+            context: context,
+            pickupController: pickupController,
+            userPosition: ref.read(userPositionProvider.notifier),
           );
-        }
-      }
-
-      fetchLocation();
       return null;
     }, []);
-
-    Future<void> calculateEstimatedFare() async {
-      if (userPosition.value == null || destinationPosition.value == null)
-        return;
-
-      try {
-        double distanceMeters = Geolocator.distanceBetween(
-          userPosition.value!.latitude,
-          userPosition.value!.longitude,
-          destinationPosition.value!.latitude,
-          destinationPosition.value!.longitude,
-        );
-
-        double distanceKm = distanceMeters / 1000.0;
-
-        final fares = <String, double>{};
-        fareRates.forEach((type, rate) {
-          double total = rate['base']! + (rate['perKm']! * distanceKm);
-          fares[type] = total;
-        });
-
-        estimatedFare.value = fares;
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error calculating fare: $e')),
-        );
-      }
-    }
-
-    Future<void> submitRideRequest(String carType) async {
-      if (userPosition.value == null || destinationController.text.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please select pickup and destination')),
-        );
-        return;
-      }
-
-      final prefs = await SharedPreferences.getInstance();
-      final riderId = prefs.getString('userObjectId') ??
-          'rider_${DateTime.now().millisecondsSinceEpoch}';
-      await prefs.setString('userObjectId', riderId);
-
-      final request = RideRequest(
-        riderId: riderId,
-        pickup: pickupController.text,
-        destination: destinationController.text,
-        carType: carType,
-        pickupLatitude: userPosition.value!.latitude,
-        pickupLongitude: userPosition.value!.longitude,
-        createdAt: DateTime.now().toUtc(),
-      );
-
-      try {
-        // Step 1: Log the JSON payload for debugging
-        final requestJson = {
-          ...request.toJson(),
-          'status': 'pending',
-          'riderId': {
-            '__type': 'Pointer',
-            'className': '_User',
-            'objectId': riderId,
-          },
-        };
-        print('RideRequest JSON Payload: $requestJson');
-
-        // Step 2: Create the ride request
-        final createResponse = await http.post(
-          Uri.parse('$back4appBaseUrl/classes/RideRequest'),
-          headers: {
-            'X-Parse-Application-Id': appId,
-            'X-Parse-REST-API-Key': restApiKey,
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode(requestJson),
-        );
-
-        if (createResponse.statusCode != 201) {
-          final errorBody = jsonDecode(createResponse.body);
-          print('Create Response Error: $errorBody');
-          throw Exception(
-              'Failed to create ride request: ${errorBody['error'] ?? 'Unknown error'} (Code: ${createResponse.statusCode})');
-        }
-
-        // Step 3: Parse and validate objectId
-        final createdObject = jsonDecode(createResponse.body);
-        print('Create Response: $createdObject');
-        final objectId = createdObject['objectId'];
-
-        if (objectId == null || objectId is! String || objectId.isEmpty) {
-          throw Exception(
-              'Invalid or missing objectId in create response: $createdObject');
-        }
-
-        // Step 4: Assign the ride request to a driver
-        final assignJson = {
-          'requestId': objectId,
-          'carType': carType,
-        };
-        print('Assign Ride Request Payload: $assignJson');
-        final assignResponse = await http.post(
-          Uri.parse('$back4appBaseUrl/functions/assignRideRequest'),
-          headers: {
-            'X-Parse-Application-Id': appId,
-            'X-Parse-REST-API-Key': restApiKey,
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode(assignJson),
-        );
-
-        if (assignResponse.statusCode != 200) {
-          final errorBody = jsonDecode(assignResponse.body);
-          print('Assign Response Error: $errorBody');
-          throw Exception(
-              'Failed to assign driver: ${errorBody['error'] ?? 'Unknown error'} (Code: ${assignResponse.statusCode})');
-        }
-
-        print('Assign Response: ${jsonDecode(assignResponse.body)}');
-
-        // Step 5: Show success message
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Ride request submitted successfully')),
-        );
-      } catch (e) {
-        // Step 6: Show error message with context
-        print('Error submitting ride request: $e');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text('Error submitting ride request: ${e.toString()}')),
-        );
-        rethrow; // For further debugging
-      }
-    }
 
     return Scaffold(
       drawer: _buildSideNavBar(context),
       body: Stack(
         children: [
-          // Map display with loading state
-          if (userPosition.value == null)
-            const Center(child: CircularProgressIndicator())
-          else
-            FlutterMap(
-              mapController: mapController,
-              options: MapOptions(
-                center: userPosition.value!,
-                zoom: 15.0,
-                onTap: (tapPosition, point) async {
-                  destinationPosition.value = point;
-
-                  try {
-                    final placemarks = await placemarkFromCoordinates(
-                      point.latitude,
-                      point.longitude,
-                    );
-                    final place = placemarks.first;
-                    destinationController.text =
-                        '${place.street}, ${place.locality}, ${place.country}';
-                  } catch (e) {
-                    destinationController.text = 'Unknown location';
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Error geocoding location: $e')),
-                    );
-                  }
-
-                  if (userPosition.value != null) {
-                    polylinePoints.value = [userPosition.value!, point];
-                    await calculateEstimatedFare();
-                  }
-                },
-              ),
-              children: [
-                TileLayer(
-                  urlTemplate:
-                      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  subdomains: const ['a', 'b', 'c'],
+          Consumer(
+            builder: (context, ref, child) {
+              final userPosition = ref.watch(userPositionProvider);
+              if (userPosition == null) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              return FlutterMap(
+                mapController: mapController,
+                options: MapOptions(
+                  center: userPosition,
+                  zoom: 15.0,
+                  onTap: (tapPosition, point) async {
+                    try {
+                      final placemarks = await placemarkFromCoordinates(
+                        point.latitude,
+                        point.longitude,
+                      );
+                      final place = placemarks.first;
+                      destinationController.text =
+                          '${place.street}, ${place.locality}, ${place.country}';
+                      ref.read(destinationPositionProvider.notifier).state =
+                          point;
+                      ref.read(polylinePointsProvider.notifier).state = [
+                        userPosition,
+                        point
+                      ];
+                      await ref
+                          .read(locationServiceProvider)
+                          .calculateEstimatedFare(
+                            context: context,
+                            userPosition:
+                                ref.read(userPositionProvider.notifier),
+                            destinationPosition:
+                                ref.read(destinationPositionProvider.notifier),
+                            fareState: ref.read(fareProvider.notifier),
+                          );
+                    } catch (e) {
+                      destinationController.text = 'Unknown location';
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Error geocoding location: $e')),
+                      );
+                    }
+                  },
                 ),
-                MarkerLayer(
-                  markers: [
-                    Marker(
-                      width: 50.0,
-                      height: 50.0,
-                      point: userPosition.value!,
-                      builder: (ctx) => const Icon(
-                        Icons.location_pin,
-                        color: Colors.red,
-                        size: 40.0,
-                      ),
-                    ),
-                    if (destinationPosition.value != null)
+                children: [
+                  TileLayer(
+                    urlTemplate:
+                        'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    subdomains: const ['a', 'b', 'c'],
+                  ),
+                  MarkerLayer(
+                    markers: [
                       Marker(
                         width: 50.0,
                         height: 50.0,
-                        point: destinationPosition.value!,
+                        point: userPosition,
                         builder: (ctx) => const Icon(
-                          Icons.flag,
-                          color: Colors.blue,
+                          Icons.location_pin,
+                          color: Colors.red,
                           size: 40.0,
                         ),
                       ),
-                  ],
-                ),
-                PolylineLayer(
-                  polylines: [
-                    if (polylinePoints.value.isNotEmpty)
-                      Polyline(
-                        points: polylinePoints.value,
-                        strokeWidth: 4.0,
-                        color: Colors.blue,
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          // Top navigation bar
+                      if (ref.watch(destinationPositionProvider) != null)
+                        Marker(
+                          width: 50.0,
+                          height: 50.0,
+                          point: ref.watch(destinationPositionProvider)!,
+                          builder: (ctx) => const Icon(
+                            Icons.flag,
+                            color: Colors.blue,
+                            size: 40.0,
+                          ),
+                        ),
+                    ],
+                  ),
+                  PolylineLayer(
+                    polylines: [
+                      if (ref.watch(polylinePointsProvider).isNotEmpty)
+                        Polyline(
+                          points: ref.watch(polylinePointsProvider),
+                          strokeWidth: 4.0,
+                          color: Colors.blue,
+                        ),
+                    ],
+                  ),
+                ],
+              );
+            },
+          ),
           SafeArea(
             child: Padding(
               padding:
@@ -791,6 +903,8 @@ class RideRequestPage extends HookConsumerWidget {
                         final currentLatLng =
                             LatLng(position.latitude, position.longitude);
                         mapController.move(currentLatLng, 15.0);
+                        ref.read(userPositionProvider.notifier).state =
+                            currentLatLng;
                       } catch (e) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
@@ -805,7 +919,6 @@ class RideRequestPage extends HookConsumerWidget {
               ),
             ),
           ),
-          // Bottom search card
           Align(
             alignment: Alignment.bottomCenter,
             child: Padding(
@@ -846,12 +959,21 @@ class RideRequestPage extends HookConsumerWidget {
                             if (locations.isNotEmpty) {
                               final dest = LatLng(locations.first.latitude,
                                   locations.first.longitude);
-                              destinationPosition.value = dest;
-                              polylinePoints.value = [
-                                userPosition.value!,
-                                dest
-                              ];
-                              await calculateEstimatedFare();
+                              ref
+                                  .read(destinationPositionProvider.notifier)
+                                  .state = dest;
+                              ref.read(polylinePointsProvider.notifier).state =
+                                  [ref.read(userPositionProvider)!, dest];
+                              await ref
+                                  .read(locationServiceProvider)
+                                  .calculateEstimatedFare(
+                                    context: context,
+                                    userPosition:
+                                        ref.read(userPositionProvider.notifier),
+                                    destinationPosition: ref.read(
+                                        destinationPositionProvider.notifier),
+                                    fareState: ref.read(fareProvider.notifier),
+                                  );
                             } else {
                               throw Exception(
                                   'No locations found for the provided address');
@@ -865,12 +987,11 @@ class RideRequestPage extends HookConsumerWidget {
                           }
 
                           _showAvailableCars(
-                            context,
-                            ref,
-                            pickupController.text,
-                            destinationController.text,
-                            estimatedFare.value,
-                            submitRideRequest,
+                            context: context,
+                            ref: ref,
+                            pickup: pickupController.text,
+                            destination: destinationController.text,
+                            fares: ref.read(fareProvider),
                           );
                         },
                         style: ElevatedButton.styleFrom(

@@ -13,102 +13,591 @@ import '../models/ride_request_model.dart';
 import '../models/driver_location_model.dart';
 import '../../auth/pages/get_started_page.dart';
 
+// Constants
 const String back4appBaseUrl = 'https://parseapi.back4app.com';
 const String appId = "jU5yWVbYCi4B44T5SncVHDitWJhnzR1P9dKmo73y";
 const String restApiKey = "hoH5efGxj37mG5fj3MQq2nDxXceK3VVsoW9csD5z";
 
-enum RideStatus { none, incoming, accepted, enRoute, pickedUp, completed }
+// Enums
+enum RideStatus { none, incoming, accepted, start, onroute, finished }
 
+// Riverpod Providers
 final rideStatusProvider = StateProvider<RideStatus>((ref) => RideStatus.none);
 final isDriverOnlineProvider = StateProvider<bool>((ref) => false);
+final driverIdProvider = StateProvider<String?>((ref) => null);
+final rideRequestProvider = StateProvider<RideRequest?>((ref) => null);
+final pickupPositionProvider = StateProvider<LatLng?>((ref) => null);
+final driverPositionProvider = StateProvider<LatLng?>((ref) => null);
+final carTypeProvider = StateProvider<String>((ref) => 'Economy');
+
+final driverServiceProvider = Provider<DriverService>((ref) {
+  return DriverService(ref);
+});
+
+final locationServiceProvider = Provider<LocationService>((ref) {
+  return LocationService();
+});
+
+// Services
+class DriverService {
+  final Ref ref;
+
+  DriverService(this.ref);
+
+  Future<void> initializeDriver(BuildContext context) async {
+    final prefs = await SharedPreferences.getInstance();
+    final driverId = prefs.getString('driverObjectId') ??
+        'driver_${DateTime.now().millisecondsSinceEpoch}';
+    await prefs.setString('driverObjectId', driverId);
+    ref.read(driverIdProvider.notifier).state = driverId;
+
+    final position =
+        await ref.read(locationServiceProvider).getCurrentLocation(context);
+    if (position != null) {
+      ref.read(driverPositionProvider.notifier).state = position;
+    }
+  }
+
+  Future<void> toggleOnlineStatus({
+    required BuildContext context,
+    required bool isOnline,
+    required String driverId,
+    required LatLng position,
+    required String carType,
+  }) async {
+    try {
+      await _updateDriverLocation(
+        context: context,
+        driverId: driverId,
+        position: position,
+        isOnline: isOnline,
+        carType: carType,
+      );
+      ref.read(isDriverOnlineProvider.notifier).state = isOnline;
+
+      if (!isOnline) {
+        ref.read(rideStatusProvider.notifier).state = RideStatus.none;
+        ref.read(rideRequestProvider.notifier).state = null;
+        ref.read(pickupPositionProvider.notifier).state = null;
+      }
+    } catch (e) {
+      print('Toggle error: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to toggle status: $e')),
+      );
+      rethrow;
+    }
+  }
+
+  Future<void> pollRideRequests({
+    required BuildContext context,
+    required String driverId,
+    required String carType,
+  }) async {
+    try {
+      final queryJson = {
+        "\$or": [
+          {
+            "status": "pending",
+            "carType": carType,
+            "assignedDriverId": null,
+          },
+          {
+            "status": "pending",
+            "carType": carType,
+            "assignedDriverId": {
+              "__type": "Pointer",
+              "className": "_User",
+              "objectId": driverId,
+            },
+          },
+          {
+            "status": "accepted",
+            "assignedDriverId": {
+              "__type": "Pointer",
+              "className": "_User",
+              "objectId": driverId,
+            },
+          },
+          {
+            "status": "start",
+            "assignedDriverId": {
+              "__type": "Pointer",
+              "className": "_User",
+              "objectId": driverId,
+            },
+          },
+          {
+            "status": "onroute",
+            "assignedDriverId": {
+              "__type": "Pointer",
+              "className": "_User",
+              "objectId": driverId,
+            },
+          },
+        ],
+      };
+      print('Poll Ride Requests Query: $queryJson');
+      final response = await http.get(
+        Uri.parse(
+            '$back4appBaseUrl/classes/RideRequest?where=${Uri.encodeComponent(jsonEncode(queryJson))}'),
+        headers: {
+          'X-Parse-Application-Id': appId,
+          'X-Parse-REST-API-Key': restApiKey,
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        print('Poll Ride Requests Response: $data');
+        if (data['results'] != null && data['results'].isNotEmpty) {
+          final requestData = data['results'][0];
+          final newRideRequest = RideRequest.fromJson({
+            'objectId': requestData['objectId'] ?? '',
+            'riderId': requestData['riderId']?['objectId'] ?? 'Unknown',
+            'pickup': requestData['pickup'] ?? 'Unknown',
+            'destination': requestData['destination'] ?? 'Unknown',
+            'carType': requestData['carType'] ?? 'Unknown',
+            'pickupLatitude': requestData['pickupLatitude']?.toDouble() ?? 0.0,
+            'pickupLongitude':
+                requestData['pickupLongitude']?.toDouble() ?? 0.0,
+            'createdAt': requestData['createdAt']?.toString() ??
+                DateTime.now().toUtc().toIso8601String(),
+          });
+
+          ref.read(rideRequestProvider.notifier).state = newRideRequest;
+          ref.read(pickupPositionProvider.notifier).state = LatLng(
+            requestData['pickupLatitude']?.toDouble() ?? 0.0,
+            requestData['pickupLongitude']?.toDouble() ?? 0.0,
+          );
+
+          final status = requestData['status'];
+          print('Ride status from backend: $status');
+          if (status == 'pending') {
+            ref.read(rideStatusProvider.notifier).state = RideStatus.incoming;
+          } else if (status == 'accepted') {
+            ref.read(rideStatusProvider.notifier).state = RideStatus.accepted;
+          } else if (status == 'start') {
+            ref.read(rideStatusProvider.notifier).state = RideStatus.start;
+          } else if (status == 'onroute') {
+            ref.read(rideStatusProvider.notifier).state = RideStatus.onroute;
+          } else {
+            print('Unexpected ride status: $status');
+            _clearRideState();
+          }
+        } else {
+          print('No ride requests found for driverId: $driverId');
+          if (ref.read(rideRequestProvider) != null &&
+              [
+                RideStatus.incoming,
+                RideStatus.accepted,
+                RideStatus.start,
+                RideStatus.onroute
+              ].contains(ref.read(rideStatusProvider))) {
+            print('Clearing stale ride request');
+            _clearRideState();
+          }
+        }
+      } else {
+        final errorBody = jsonDecode(response.body);
+        print('Poll error: $errorBody');
+        throw Exception(
+            'Error polling rides: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
+      }
+    } catch (e) {
+      print('Error polling rides: $e');
+      if (ref.read(rideRequestProvider) == null &&
+          ref.read(isDriverOnlineProvider)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error polling rides: $e')),
+        );
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> acceptRideRequest({
+    required BuildContext context,
+    required String objectId,
+    required String driverId,
+  }) async {
+    try {
+      final updateJson = {
+        'status': 'accepted',
+        'assignedDriverId': {
+          '__type': 'Pointer',
+          'className': '_User',
+          'objectId': driverId,
+        },
+      };
+      print('Accept Ride Request Payload: $updateJson');
+      final response = await http.put(
+        Uri.parse('$back4appBaseUrl/classes/RideRequest/$objectId'),
+        headers: {
+          'X-Parse-Application-Id': appId,
+          'X-Parse-REST-API-Key': restApiKey,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(updateJson),
+      );
+      if (response.statusCode != 200) {
+        final errorBody = jsonDecode(response.body);
+        print('Accept Ride Error: $errorBody');
+        throw Exception(
+            'Failed to accept ride: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
+      }
+      print('Accept Ride Response: ${jsonDecode(response.body)}');
+      ref.read(rideStatusProvider.notifier).state = RideStatus.accepted;
+    } catch (e) {
+      print('Error accepting ride: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error accepting ride: $e')),
+      );
+      rethrow;
+    }
+  }
+
+  Future<void> rejectRideRequest({
+    required BuildContext context,
+    required String objectId,
+  }) async {
+    try {
+      final response = await http.put(
+        Uri.parse('$back4appBaseUrl/classes/RideRequest/$objectId'),
+        headers: {
+          'X-Parse-Application-Id': appId,
+          'X-Parse-REST-API-Key': restApiKey,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'status': 'rejected',
+          'assignedDriverId': null,
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        final errorBody = jsonDecode(response.body);
+        print('Reject Ride Error: $errorBody');
+        throw Exception(
+            'Failed to reject ride: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
+      }
+      print('Reject Ride Response: ${jsonDecode(response.body)}');
+      _clearRideState();
+    } catch (e) {
+      print('Error rejecting ride: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error rejecting ride: $e')),
+      );
+      rethrow;
+    }
+  }
+
+  void _clearRideState() {
+    ref.read(rideStatusProvider.notifier).state = RideStatus.none;
+    ref.read(rideRequestProvider.notifier).state = null;
+    ref.read(pickupPositionProvider.notifier).state = null;
+  }
+
+  Future<void> _updateDriverLocation({
+    required BuildContext context,
+    required String driverId,
+    required LatLng position,
+    required bool isOnline,
+    required String carType,
+  }) async {
+    final driverLocation = DriverLocation(
+      driverId: driverId,
+      latitude: position.latitude,
+      longitude: position.longitude,
+      updatedAt: DateTime.now().toUtc(),
+      carType: carType,
+      isOnline: isOnline,
+    );
+
+    try {
+      final queryJson = {"driverId": driverId};
+      print('Query DriverLocation: $queryJson');
+      final queryResponse = await http.get(
+        Uri.parse(
+            '$back4appBaseUrl/classes/DriverLocation?where=${Uri.encodeComponent(jsonEncode(queryJson))}'),
+        headers: {
+          'X-Parse-Application-Id': appId,
+          'X-Parse-REST-API-Key': restApiKey,
+        },
+      );
+
+      if (queryResponse.statusCode != 200) {
+        final errorBody = jsonDecode(queryResponse.body);
+        print('Query Driver Error: $errorBody');
+        throw Exception(
+            'Failed to query driver location: ${errorBody['error'] ?? 'Unknown error'} (Code: ${queryResponse.statusCode})');
+      }
+
+      final queryData = jsonDecode(queryResponse.body);
+      print('Query Driver Response: $queryData');
+
+      if (queryData['results'] != null && queryData['results'].isNotEmpty) {
+        final objectId = queryData['results'][0]['objectId'];
+        final updateJson = {
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+          'updatedAt': {
+            '__type': 'Date',
+            'iso': driverLocation.updatedAt.toIso8601String(),
+          },
+          'carType': carType,
+          'isOnline': isOnline,
+        };
+        print('Update DriverLocation Payload: $updateJson');
+        final updateResponse = await http.put(
+          Uri.parse('$back4appBaseUrl/classes/DriverLocation/$objectId'),
+          headers: {
+            'X-Parse-Application-Id': appId,
+            'X-Parse-REST-API-Key': restApiKey,
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode(updateJson),
+        );
+
+        if (updateResponse.statusCode != 200) {
+          final errorBody = jsonDecode(updateResponse.body);
+          print('Update Driver Error: $errorBody');
+          throw Exception(
+              'Failed to update driver location: ${errorBody['error'] ?? 'Unknown error'} (Code: ${updateResponse.statusCode})');
+        }
+        print('Update Driver Response: ${jsonDecode(updateResponse.body)}');
+      } else {
+        final createJson = driverLocation.toJson();
+        print('Create DriverLocation Payload: $createJson');
+        final createResponse = await http.post(
+          Uri.parse('$back4appBaseUrl/classes/DriverLocation'),
+          headers: {
+            'X-Parse-Application-Id': appId,
+            'X-Parse-REST-API-Key': restApiKey,
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode(createJson),
+        );
+
+        if (createResponse.statusCode != 201) {
+          final errorBody = jsonDecode(createResponse.body);
+          print('Create Driver Error: $errorBody');
+          throw Exception(
+              'Failed to create driver location: ${errorBody['error'] ?? 'Unknown error'} (Code: ${createResponse.statusCode})');
+        }
+        print('Create Driver Response: ${jsonDecode(createResponse.body)}');
+      }
+    } catch (e) {
+      print('Error updating driver location: $e');
+      throw e;
+    }
+  }
+
+  Future<void> updateRideStatus({
+    required BuildContext context,
+    required String objectId,
+    required String status,
+  }) async {
+    try {
+      final updateJson = {
+        'status': status,
+      };
+      print('Update Ride Status Payload: $updateJson');
+      final response = await http.put(
+        Uri.parse('$back4appBaseUrl/classes/RideRequest/$objectId'),
+        headers: {
+          'X-Parse-Application-Id': appId,
+          'X-Parse-REST-API-Key': restApiKey,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(updateJson),
+      );
+
+      if (response.statusCode != 200) {
+        final errorBody = jsonDecode(response.body);
+        print('Update Ride Status Error: $errorBody');
+        throw Exception(
+            'Failed to update ride status: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
+      }
+      print('Update Ride Status Response: ${jsonDecode(response.body)}');
+    } catch (e) {
+      print('Error updating ride status: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error updating ride status: $e')),
+      );
+      rethrow;
+    }
+  }
+}
+
+class LocationService {
+  Future<LatLng?> getCurrentLocation(BuildContext context) async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please enable location services')),
+        );
+        return null;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location permission denied')),
+          );
+          return null;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Permissions permanently denied')),
+        );
+        return null;
+      }
+
+      final position = await Geolocator.getCurrentPosition();
+      return LatLng(position.latitude, position.longitude);
+    } catch (e) {
+      print('Error getting location: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error getting location: $e')),
+      );
+      return null;
+    }
+  }
+}
 
 class DriverConsolePage extends HookConsumerWidget {
   const DriverConsolePage({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isOnline = ref.watch(isDriverOnlineProvider);
-    final rideStatus = ref.watch(rideStatusProvider);
     final mapController = useMemoized(() => MapController());
-    final position = useState<LatLng?>(null);
-    final pickupPosition = useState<LatLng?>(null);
-    final rideRequest = useState<RideRequest?>(null);
-    final driverId = useState<String?>(null);
-    final timer = useRef<Timer?>(null);
-    final carType = useState<String>('Economy');
     final isToggling = useState<bool>(false);
-    final isPolling = useState<bool>(false);
+    final ridePollTimer = useRef<Timer?>(null);
+    final locationUpdateTimer = useRef<Timer?>(null);
+    final isRidePolling = useState<bool>(false);
 
-    // Initialize driver ID and location
     useEffect(() {
-      Future<void> initialize() async {
-        final prefs = await SharedPreferences.getInstance();
-        driverId.value = prefs.getString('driverObjectId') ??
-            'driver_${DateTime.now().millisecondsSinceEpoch}';
-        await prefs.setString('driverObjectId', driverId.value!);
-
-        final pos = await _getCurrentLocation(context);
-        position.value = pos;
-        if (pos != null) {
-          mapController.move(pos, 15.0);
-        }
-      }
-
-      initialize();
-
+      ref.read(driverServiceProvider).initializeDriver(context);
       return () {
-        timer.value?.cancel();
+        ridePollTimer.value?.cancel();
+        locationUpdateTimer.value?.cancel();
       };
     }, []);
 
-    // Manage polling for ride requests
+    // Polling for ride requests
     useEffect(() {
-      if (!isOnline || driverId.value == null || position.value == null) {
-        timer.value?.cancel();
-        isPolling.value = false;
+      final isOnline = ref.watch(isDriverOnlineProvider);
+      final driverId = ref.watch(driverIdProvider);
+      final position = ref.watch(driverPositionProvider);
+      final carType = ref.watch(carTypeProvider);
+      final rideStatus = ref.watch(rideStatusProvider);
+
+      if (!isOnline ||
+          driverId == null ||
+          position == null ||
+          ![RideStatus.none, RideStatus.incoming].contains(rideStatus)) {
+        ridePollTimer.value?.cancel();
+        isRidePolling.value = false;
         return null;
       }
 
-      if (isPolling.value) return null; // Prevent duplicate polling
+      if (isRidePolling.value) return null;
 
-      isPolling.value = true;
-      timer.value?.cancel(); // Cancel any existing timer
+      isRidePolling.value = true;
+      ridePollTimer.value?.cancel();
 
-      Future<void> poll() async {
+      Future<void> pollRides() async {
         try {
-          await _pollRideRequests(context, ref, driverId.value!, rideRequest,
-              pickupPosition, carType.value);
-          await _updateDriverLocation(context, driverId.value!, position.value!,
-              isOnline, carType.value);
+          await ref.read(driverServiceProvider).pollRideRequests(
+                context: context,
+                driverId: driverId,
+                carType: carType,
+              );
         } catch (e) {
-          print('Polling error: $e');
-          if (rideRequest.value == null && ref.read(isDriverOnlineProvider)) {
+          print('Ride polling error: $e');
+          if (ref.read(rideRequestProvider) == null && isOnline) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Polling error: $e')),
+              SnackBar(content: Text('Error polling rides: $e')),
             );
           }
         }
       }
 
-      // Start polling immediately
-      poll();
-
-      // Set up periodic polling
-      timer.value = Timer.periodic(const Duration(seconds: 5), (_) async {
-        if (!isPolling.value) {
-          timer.value?.cancel();
+      pollRides();
+      ridePollTimer.value =
+          Timer.periodic(const Duration(seconds: 5), (_) async {
+        if (!isRidePolling.value ||
+            ![RideStatus.none, RideStatus.incoming]
+                .contains(ref.read(rideStatusProvider))) {
+          ridePollTimer.value?.cancel();
+          isRidePolling.value = false;
           return;
         }
-        await poll();
+        await pollRides();
       });
 
       return () {
-        timer.value?.cancel();
-        isPolling.value = false;
+        ridePollTimer.value?.cancel();
+        isRidePolling.value = false;
       };
-    }, [isOnline, driverId.value, position.value, carType.value]);
+    }, [
+      ref.watch(isDriverOnlineProvider),
+      ref.watch(driverIdProvider),
+      ref.watch(driverPositionProvider),
+      ref.watch(carTypeProvider),
+      ref.watch(rideStatusProvider),
+    ]);
 
-    if (position.value == null) {
+    // Separate polling for driver location updates
+    useEffect(() {
+      final isOnline = ref.watch(isDriverOnlineProvider);
+      final driverId = ref.watch(driverIdProvider);
+      final position = ref.watch(driverPositionProvider);
+      final carType = ref.watch(carTypeProvider);
+
+      if (!isOnline || driverId == null || position == null) {
+        locationUpdateTimer.value?.cancel();
+        return null;
+      }
+
+      Future<void> updateLocation() async {
+        try {
+          await ref.read(driverServiceProvider).toggleOnlineStatus(
+                context: context,
+                isOnline: isOnline,
+                driverId: driverId,
+                position: position,
+                carType: carType,
+              );
+        } catch (e) {
+          print('Location update error: $e');
+        }
+      }
+
+      updateLocation();
+      locationUpdateTimer.value =
+          Timer.periodic(const Duration(seconds: 10), (_) async {
+        await updateLocation();
+      });
+
+      return () {
+        locationUpdateTimer.value?.cancel();
+      };
+    }, [
+      ref.watch(isDriverOnlineProvider),
+      ref.watch(driverIdProvider),
+      ref.watch(driverPositionProvider),
+      ref.watch(carTypeProvider),
+    ]);
+
+    final position = ref.watch(driverPositionProvider);
+    if (position == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
@@ -123,16 +612,19 @@ class DriverConsolePage extends HookConsumerWidget {
           Row(
             children: [
               Text(
-                isOnline ? "Online" : "Offline",
+                ref.watch(isDriverOnlineProvider) ? "Online" : "Offline",
                 style: const TextStyle(fontWeight: FontWeight.w500),
               ),
               Switch(
                 activeColor: Colors.orange,
-                value: isOnline,
+                value: ref.watch(isDriverOnlineProvider),
                 onChanged: isToggling.value
                     ? null
                     : (value) async {
-                        if (driverId.value == null || position.value == null) {
+                        final driverId = ref.read(driverIdProvider);
+                        final position = ref.read(driverPositionProvider);
+                        final carType = ref.read(carTypeProvider);
+                        if (driverId == null || position == null) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                                 content:
@@ -140,34 +632,17 @@ class DriverConsolePage extends HookConsumerWidget {
                           );
                           return;
                         }
-
                         isToggling.value = true;
                         try {
-                          await _updateDriverLocation(
-                            context,
-                            driverId.value!,
-                            position.value!,
-                            value,
-                            carType.value,
-                          );
-                          ref.read(isDriverOnlineProvider.notifier).state =
-                              value;
-
-                          if (!value) {
-                            // Clear ride state when going offline
-                            ref.read(rideStatusProvider.notifier).state =
-                                RideStatus.none;
-                            rideRequest.value = null;
-                            pickupPosition.value = null;
-                            timer.value?.cancel();
-                            isPolling.value = false;
-                          }
-                        } catch (e) {
-                          print('Toggle error: $e');
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                                content: Text('Failed to toggle status: $e')),
-                          );
+                          await ref
+                              .read(driverServiceProvider)
+                              .toggleOnlineStatus(
+                                context: context,
+                                isOnline: value,
+                                driverId: driverId,
+                                position: position,
+                                carType: carType,
+                              );
                         } finally {
                           isToggling.value = false;
                         }
@@ -184,7 +659,7 @@ class DriverConsolePage extends HookConsumerWidget {
           FlutterMap(
             mapController: mapController,
             options: MapOptions(
-              center: position.value!,
+              center: position,
               zoom: 15.0,
               maxZoom: 18,
               minZoom: 3,
@@ -198,17 +673,16 @@ class DriverConsolePage extends HookConsumerWidget {
               ),
               MarkerLayer(
                 markers: [
-                  if (position.value != null)
+                  Marker(
+                    point: position,
+                    width: 40,
+                    height: 40,
+                    builder: (ctx) => const Icon(Icons.my_location,
+                        color: Colors.blue, size: 30),
+                  ),
+                  if (ref.watch(pickupPositionProvider) != null)
                     Marker(
-                      point: position.value!,
-                      width: 40,
-                      height: 40,
-                      builder: (ctx) => const Icon(Icons.my_location,
-                          color: Colors.blue, size: 30),
-                    ),
-                  if (pickupPosition.value != null)
-                    Marker(
-                      point: pickupPosition.value!,
+                      point: ref.watch(pickupPositionProvider)!,
                       width: 50,
                       height: 50,
                       builder: (ctx) => const Icon(Icons.location_pin,
@@ -218,10 +692,22 @@ class DriverConsolePage extends HookConsumerWidget {
               ),
             ],
           ),
-          if (rideStatus != RideStatus.none && rideRequest.value != null)
-            _rideBottomSheet(context, ref, rideRequest.value!, driverId.value!,
-                rideRequest, pickupPosition),
-          if (isOnline && rideStatus == RideStatus.none)
+          Consumer(
+            builder: (context, ref, child) {
+              final rideStatus = ref.watch(rideStatusProvider);
+              final rideRequest = ref.watch(rideRequestProvider);
+              final driverId = ref.watch(driverIdProvider);
+              if (rideStatus != RideStatus.none &&
+                  rideRequest != null &&
+                  driverId != null) {
+                return _rideBottomSheet(
+                    context, ref, rideRequest, driverId, mapController);
+              }
+              return const SizedBox.shrink();
+            },
+          ),
+          if (ref.watch(isDriverOnlineProvider) &&
+              ref.watch(rideStatusProvider) == RideStatus.none)
             Positioned(
               bottom: 20,
               left: 20,
@@ -266,11 +752,13 @@ class DriverConsolePage extends HookConsumerWidget {
                     backgroundImage: AssetImage('lib/shared/assets/user.png')),
                 SizedBox(width: 12),
                 Expanded(
-                  child: Text("John Doe",
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold)),
+                  child: Text(
+                    "John Doe",
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold),
+                  ),
                 ),
               ],
             ),
@@ -297,8 +785,10 @@ class DriverConsolePage extends HookConsumerWidget {
       BuildContext context, IconData icon, String title, VoidCallback onTap) {
     return ListTile(
       leading: Icon(icon, color: Colors.grey),
-      title: Text(title,
-          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+      title: Text(
+        title,
+        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+      ),
       onTap: () {
         Navigator.pop(context);
         onTap();
@@ -311,14 +801,14 @@ class DriverConsolePage extends HookConsumerWidget {
     WidgetRef ref,
     RideRequest request,
     String driverId,
-    ValueNotifier<RideRequest?> rideRequest,
-    ValueNotifier<LatLng?> pickupPosition,
+    MapController mapController,
   ) {
     final rideStatus = ref.watch(rideStatusProvider);
 
     String statusText;
     String nextButtonText;
     RideStatus? nextState;
+    String? nextBackendStatus;
     bool showRejectButton = rideStatus == RideStatus.incoming;
 
     switch (rideStatus) {
@@ -326,31 +816,37 @@ class DriverConsolePage extends HookConsumerWidget {
         statusText = "New Ride Request";
         nextButtonText = "Accept";
         nextState = RideStatus.accepted;
+        nextBackendStatus = null;
         break;
       case RideStatus.accepted:
-        statusText = "Navigating to pickup...";
+        statusText = "Accepted - Navigating to pickup...";
         nextButtonText = "Start Ride";
-        nextState = RideStatus.enRoute;
+        nextState = RideStatus.start;
+        nextBackendStatus = 'start';
         break;
-      case RideStatus.enRoute:
-        statusText = "Rider picked up. Heading to destination...";
+      case RideStatus.start:
+        statusText = "Ride started - Heading to pickup...";
         nextButtonText = "Picked Up";
-        nextState = RideStatus.pickedUp;
+        nextState = RideStatus.onroute;
+        nextBackendStatus = 'onroute';
         break;
-      case RideStatus.pickedUp:
-        statusText = "Almost there...";
+      case RideStatus.onroute:
+        statusText = "On route to destination...";
         nextButtonText = "Complete Ride";
-        nextState = RideStatus.completed;
+        nextState = RideStatus.finished;
+        nextBackendStatus = null;
         break;
-      case RideStatus.completed:
-        statusText = "Ride Completed!";
+      case RideStatus.finished:
+        statusText = "Ride Finished!";
         nextButtonText = "Finish";
         nextState = null;
+        nextBackendStatus = null;
         break;
       default:
         statusText = "";
         nextButtonText = "";
         nextState = null;
+        nextBackendStatus = null;
     }
 
     return Positioned(
@@ -402,19 +898,10 @@ class DriverConsolePage extends HookConsumerWidget {
                           );
                           return;
                         }
-                        try {
-                          await _rejectRideRequest(
-                              context, driverId, request.objectId!);
-                          ref.read(rideStatusProvider.notifier).state =
-                              RideStatus.none;
-                          rideRequest.value = null;
-                          pickupPosition.value = null;
-                        } catch (e) {
-                          print('Error rejecting ride: $e');
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Error rejecting ride: $e')),
-                          );
-                        }
+                        await ref.read(driverServiceProvider).rejectRideRequest(
+                              context: context,
+                              objectId: request.objectId!,
+                            );
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.red,
@@ -422,8 +909,10 @@ class DriverConsolePage extends HookConsumerWidget {
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12)),
                       ),
-                      child: const Text("Reject",
-                          style: TextStyle(fontSize: 16, color: Colors.white)),
+                      child: const Text(
+                        "Reject",
+                        style: TextStyle(fontSize: 16, color: Colors.white),
+                      ),
                     ),
                   ),
                 if (showRejectButton) const SizedBox(width: 10),
@@ -438,50 +927,32 @@ class DriverConsolePage extends HookConsumerWidget {
                         );
                         return;
                       }
-                      try {
-                        if (nextState == RideStatus.accepted) {
-                          final updateJson = {
-                            'status': 'accepted',
-                            'assignedDriverId': {
-                              '__type': 'Pointer',
-                              'className': '_User',
-                              'objectId': driverId,
-                            },
-                          };
-                          print('Accept Ride Request Payload: $updateJson');
-                          final response = await http.put(
-                            Uri.parse(
-                                '$back4appBaseUrl/classes/RideRequest/${request.objectId}'),
-                            headers: {
-                              'X-Parse-Application-Id': appId,
-                              'X-Parse-REST-API-Key': restApiKey,
-                              'Content-Type': 'application/json',
-                            },
-                            body: jsonEncode(updateJson),
-                          );
-                          if (response.statusCode != 200) {
-                            final errorBody = jsonDecode(response.body);
-                            print('Accept Ride Error: $errorBody');
-                            throw Exception(
-                                'Failed to accept ride: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
-                          }
-                          print(
-                              'Accept Ride Response: ${jsonDecode(response.body)}');
+                      if (nextState == RideStatus.accepted) {
+                        await ref.read(driverServiceProvider).acceptRideRequest(
+                              context: context,
+                              objectId: request.objectId!,
+                              driverId: driverId,
+                            );
+                      } else if (nextState == RideStatus.finished) {
+                        await ref.read(driverServiceProvider).completeRide(
+                              context: context,
+                              objectId: request.objectId!,
+                            );
+                        ref.read(driverServiceProvider)._clearRideState();
+                      } else if (nextBackendStatus != null) {
+                        await ref.read(driverServiceProvider).updateRideStatus(
+                              context: context,
+                              objectId: request.objectId!,
+                              status: nextBackendStatus,
+                            );
+                        ref.read(rideStatusProvider.notifier).state =
+                            nextState!;
+                        if (nextState == RideStatus.start) {
+                          mapController.move(
+                              ref.read(pickupPositionProvider)!, 15.0);
                         }
-                        if (nextState == null) {
-                          ref.read(rideStatusProvider.notifier).state =
-                              RideStatus.none;
-                          rideRequest.value = null;
-                          pickupPosition.value = null;
-                        } else {
-                          ref.read(rideStatusProvider.notifier).state =
-                              nextState;
-                        }
-                      } catch (e) {
-                        print('Error updating ride status: $e');
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Error updating status: $e')),
-                        );
+                      } else if (nextState == null) {
+                        ref.read(driverServiceProvider)._clearRideState();
                       }
                     },
                     style: ElevatedButton.styleFrom(
@@ -491,9 +962,10 @@ class DriverConsolePage extends HookConsumerWidget {
                           borderRadius: BorderRadius.circular(12)),
                       elevation: 2,
                     ),
-                    child: Text(nextButtonText,
-                        style:
-                            const TextStyle(fontSize: 16, color: Colors.white)),
+                    child: Text(
+                      nextButtonText,
+                      style: const TextStyle(fontSize: 16, color: Colors.white),
+                    ),
                   ),
                 ),
               ],
@@ -510,230 +982,42 @@ class DriverConsolePage extends HookConsumerWidget {
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         children: [
-          Text("$label: ",
-              style:
-                  const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+          Text(
+            "$label: ",
+            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+          ),
           Expanded(
-              child: Text(value,
-                  style: const TextStyle(fontSize: 16, color: Colors.black54))),
+            child: Text(
+              value,
+              style: const TextStyle(fontSize: 16, color: Colors.black54),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Future<void> _updateDriverLocation(
-    BuildContext context,
-    String driverId,
-    LatLng position,
-    bool isOnline,
-    String carType,
-  ) async {
-    final driverLocation = DriverLocation(
-      driverId: driverId,
-      latitude: position.latitude,
-      longitude: position.longitude,
-      updatedAt: DateTime.now().toUtc(),
-      carType: carType,
-      isOnline: isOnline,
-    );
-
+  Future<void> logout(BuildContext context) async {
     try {
-      // Query for existing DriverLocation
-      final queryJson = {"driverId": driverId};
-      print('Query DriverLocation: $queryJson');
-      final queryResponse = await http.get(
-        Uri.parse(
-            '$back4appBaseUrl/classes/DriverLocation?where=${Uri.encodeComponent(jsonEncode(queryJson))}'),
-        headers: {
-          'X-Parse-Application-Id': appId,
-          'X-Parse-REST-API-Key': restApiKey,
-        },
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('driverObjectId');
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const GetStartedPage()),
       );
-
-      if (queryResponse.statusCode != 200) {
-        final errorBody = jsonDecode(queryResponse.body);
-        print('Query Driver Error: $errorBody');
-        throw Exception(
-            'Failed to query driver location: ${errorBody['error'] ?? 'Unknown error'} (Code: ${queryResponse.statusCode})');
-      }
-
-      final queryData = jsonDecode(queryResponse.body);
-      print('Query Driver Response: $queryData');
-
-      if (queryData['results'] != null && queryData['results'].isNotEmpty) {
-        // Update existing record
-        final objectId = queryData['results'][0]['objectId'];
-        final updateJson = {
-          'latitude': position.latitude,
-          'longitude': position.longitude,
-          'updatedAt': {
-            '__type': 'Date',
-            'iso': driverLocation.updatedAt.toIso8601String(),
-          },
-          'carType': carType,
-          'isOnline': isOnline,
-        };
-        print('Update DriverLocation Payload: $updateJson');
-        final updateResponse = await http.put(
-          Uri.parse('$back4appBaseUrl/classes/DriverLocation/$objectId'),
-          headers: {
-            'X-Parse-Application-Id': appId,
-            'X-Parse-REST-API-Key': restApiKey,
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode(updateJson),
-        );
-
-        if (updateResponse.statusCode != 200) {
-          final errorBody = jsonDecode(updateResponse.body);
-          print('Update Driver Error: $errorBody');
-          throw Exception(
-              'Failed to update driver location: ${errorBody['error'] ?? 'Unknown error'} (Code: ${updateResponse.statusCode})');
-        }
-        print('Update Driver Response: ${jsonDecode(updateResponse.body)}');
-      } else {
-        // Create new record if none exists
-        final createJson = driverLocation.toJson();
-        print('Create DriverLocation Payload: $createJson');
-        final createResponse = await http.post(
-          Uri.parse('$back4appBaseUrl/classes/DriverLocation'),
-          headers: {
-            'X-Parse-Application-Id': appId,
-            'X-Parse-REST-API-Key': restApiKey,
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode(createJson),
-        );
-
-        if (createResponse.statusCode != 201) {
-          final errorBody = jsonDecode(createResponse.body);
-          print('Create Driver Error: $errorBody');
-          throw Exception(
-              'Failed to create driver location: ${errorBody['error'] ?? 'Unknown error'} (Code: ${createResponse.statusCode})');
-        }
-        print('Create Driver Response: ${jsonDecode(createResponse.body)}');
-      }
     } catch (e) {
-      print('Error updating driver location: $e');
-      throw e;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error logging out: $e')),
+      );
     }
   }
+}
 
-  Future<void> _pollRideRequests(
-    BuildContext context,
-    WidgetRef ref,
-    String driverId,
-    ValueNotifier<RideRequest?> rideRequest,
-    ValueNotifier<LatLng?> pickupPosition,
-    String carType,
-  ) async {
-    try {
-      // Query for pending or accepted rides
-      final queryJson = {
-        "\$or": [
-          {
-            "status": "pending",
-            "carType": carType,
-            "assignedDriverId": null, // Unassigned pending requests
-          },
-          {
-            "status": "pending",
-            "carType": carType,
-            "assignedDriverId": {
-              "__type": "Pointer",
-              "className": "_User",
-              "objectId": driverId
-            }
-          },
-          {
-            "status": "accepted",
-            "assignedDriverId": {
-              "__type": "Pointer",
-              "className": "_User",
-              "objectId": driverId
-            }
-          }
-        ]
-      };
-      print('Poll Ride Requests Query: $queryJson');
-      final response = await http.get(
-        Uri.parse(
-            '$back4appBaseUrl/classes/RideRequest?where=${Uri.encodeComponent(jsonEncode(queryJson))}'),
-        headers: {
-          'X-Parse-Application-Id': appId,
-          'X-Parse-REST-API-Key': restApiKey,
-        },
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        print('Poll Ride Requests Response: $data');
-        if (data['results'] != null && data['results'].isNotEmpty) {
-          final requestData = data['results'][0];
-          print('Processing ride request: $requestData');
-          final newRideRequest = RideRequest.fromJson({
-            'objectId': requestData['objectId'] ?? '',
-            'riderId': requestData['riderId']?['objectId'] ?? 'Unknown',
-            'pickup': requestData['pickup'] ?? 'Unknown',
-            'destination': requestData['destination'] ?? 'Unknown',
-            'carType': requestData['carType'] ?? 'Unknown',
-            'pickupLatitude': requestData['pickupLatitude']?.toDouble() ?? 0.0,
-            'pickupLongitude':
-                requestData['pickupLongitude']?.toDouble() ?? 0.0,
-            'createdAt': requestData['createdAt']?.toString() ??
-                DateTime.now().toUtc().toIso8601String(),
-          });
-
-          // Always update state to ensure UI reflects latest data
-          rideRequest.value = newRideRequest;
-          pickupPosition.value = LatLng(
-            requestData['pickupLatitude']?.toDouble() ?? 0.0,
-            requestData['pickupLongitude']?.toDouble() ?? 0.0,
-          );
-
-          // Set status based on backend
-          final status = requestData['status'];
-          print('Ride status from backend: $status');
-          if (status == 'pending') {
-            ref.read(rideStatusProvider.notifier).state = RideStatus.incoming;
-          } else if (status == 'accepted') {
-            ref.read(rideStatusProvider.notifier).state = RideStatus.accepted;
-          } else {
-            print('Unexpected ride status: $status');
-            ref.read(rideStatusProvider.notifier).state = RideStatus.none;
-            rideRequest.value = null;
-            pickupPosition.value = null;
-          }
-        } else {
-          print('No ride requests found for driverId: $driverId');
-          // Clear stale ride request
-          if (rideRequest.value != null &&
-              [RideStatus.incoming, RideStatus.accepted]
-                  .contains(ref.read(rideStatusProvider))) {
-            print('Clearing stale ride request');
-            rideRequest.value = null;
-            pickupPosition.value = null;
-            ref.read(rideStatusProvider.notifier).state = RideStatus.none;
-          }
-        }
-      } else {
-        final errorBody = jsonDecode(response.body);
-        print('Poll error: $errorBody');
-        throw Exception(
-            'Error polling rides: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
-      }
-    } catch (e) {
-      print('Error polling rides: $e');
-      if (rideRequest.value == null && ref.read(isDriverOnlineProvider)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error polling rides: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _rejectRideRequest(
-      BuildContext context, String driverId, String objectId) async {
+extension on DriverService {
+  Future<void> completeRide({
+    required BuildContext context,
+    required String objectId,
+  }) async {
     try {
       final response = await http.put(
         Uri.parse('$back4appBaseUrl/classes/RideRequest/$objectId'),
@@ -743,73 +1027,23 @@ class DriverConsolePage extends HookConsumerWidget {
           'Content-Type': 'application/json',
         },
         body: jsonEncode({
-          'status': 'rejected',
-          'assignedDriverId': null,
+          'status': 'finished',
         }),
       );
 
       if (response.statusCode != 200) {
         final errorBody = jsonDecode(response.body);
-        print('Reject Ride Error: $errorBody');
+        print('Complete Ride Error: $errorBody');
         throw Exception(
-            'Failed to reject ride: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
+            'Failed to complete ride: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
       }
-      print('Reject Ride Response: ${jsonDecode(response.body)}');
+      print('Complete Ride Response: ${jsonDecode(response.body)}');
     } catch (e) {
-      print('Error rejecting ride: $e');
-      throw Exception('Failed to reject ride: $e');
-    }
-  }
-
-  Future<LatLng?> _getCurrentLocation(BuildContext context) async {
-    try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please enable location services')),
-        );
-        return null;
-      }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Location permission denied')),
-          );
-          return null;
-        }
-      }
-
-      if (permission == LocationPermission.deniedForever) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Permissions permanently denied')),
-        );
-        return null;
-      }
-
-      final position = await Geolocator.getCurrentPosition();
-      return LatLng(position.latitude, position.longitude);
-    } catch (e) {
-      print('Error getting location: $e');
+      print('Error completing ride: $e');
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error getting location: $e')),
+        SnackBar(content: Text('Error completing ride: $e')),
       );
-      return null;
-    }
-  }
-
-  Future<void> logout(BuildContext context) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove('driverObjectId');
-      Navigator.pushReplacement(context,
-          MaterialPageRoute(builder: (context) => const GetStartedPage()));
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error logging out: $e')),
-      );
+      rethrow;
     }
   }
 }
