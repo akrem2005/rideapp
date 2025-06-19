@@ -14,6 +14,7 @@ import '../model/ride_request_model.dart';
 import '../../auth/pages/get_started_page.dart';
 import 'discount_page.dart';
 import 'order_history_page.dart';
+import 'setting_page.dart';
 
 // Constants
 const String back4appBaseUrl = 'https://parseapi.back4app.com';
@@ -606,7 +607,7 @@ class RideRequestPage extends HookConsumerWidget {
                   const SizedBox(width: RideRequestPageStyles.spacing),
                   Expanded(
                     child: Text(
-                      "John Doe",
+                      "Welcome",
                       style: RideRequestPageStyles.titleStyle.copyWith(
                           color: RideRequestPageStyles.backgroundColor),
                     ),
@@ -624,15 +625,20 @@ class RideRequestPage extends HookConsumerWidget {
                         MaterialPageRoute(
                             builder: (context) => const OrderHistoryPage()));
                   }),
-                  _buildDrawerItem(context, CupertinoIcons.cart, 'Promotions',
+                  _buildDrawerItem(context, CupertinoIcons.cart, 'Discounts',
                       () {
                     Navigator.push(
                         context,
                         MaterialPageRoute(
                             builder: (context) => const DiscountPage()));
                   }),
-                  _buildDrawerItem(
-                      context, CupertinoIcons.settings, 'Settings', () {}),
+                  _buildDrawerItem(context, CupertinoIcons.settings, 'Settings',
+                      () {
+                    Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (context) => const RiderSettingsPage()));
+                  }),
                   _buildDrawerItem(
                       context, CupertinoIcons.question, 'Help', () {}),
                   _buildDrawerItem(context, CupertinoIcons.arrow_left_circle,
