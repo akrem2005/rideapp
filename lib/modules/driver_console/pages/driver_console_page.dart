@@ -19,7 +19,7 @@ const String appId = "jU5yWVbYCi4B44T5SncVHDitWJhnzR1P9dKmo73y";
 const String restApiKey = "hoH5efGxj37mG5fj3MQq2nDxXceK3VVsoW9csD5z";
 
 // Enums
-enum RideStatus { none, incoming, accepted, start, onroute, finished }
+enum RideStatus { none, assigned, incoming, accepted, start, onroute, finished }
 
 // Riverpod Providers
 final rideStatusProvider = StateProvider<RideStatus>((ref) => RideStatus.none);
@@ -98,16 +98,11 @@ class DriverService {
       final queryJson = {
         "\$or": [
           {
-            "status": "pending",
-            "carType": carType,
-            "assignedDriverId": null,
-          },
-          {
-            "status": "pending",
+            "status": "assigned",
             "carType": carType,
             "assignedDriverId": {
               "__type": "Pointer",
-              "className": "_User",
+              "className": "Driver", // Changed from _User to Driver
               "objectId": driverId,
             },
           },
@@ -115,7 +110,7 @@ class DriverService {
             "status": "accepted",
             "assignedDriverId": {
               "__type": "Pointer",
-              "className": "_User",
+              "className": "Driver",
               "objectId": driverId,
             },
           },
@@ -123,7 +118,7 @@ class DriverService {
             "status": "start",
             "assignedDriverId": {
               "__type": "Pointer",
-              "className": "_User",
+              "className": "Driver",
               "objectId": driverId,
             },
           },
@@ -131,7 +126,7 @@ class DriverService {
             "status": "onroute",
             "assignedDriverId": {
               "__type": "Pointer",
-              "className": "_User",
+              "className": "Driver",
               "objectId": driverId,
             },
           },
@@ -140,7 +135,7 @@ class DriverService {
       print('Poll Ride Requests Query: $queryJson');
       final response = await http.get(
         Uri.parse(
-            '$back4appBaseUrl/classes/RideRequest?where=${Uri.encodeComponent(jsonEncode(queryJson))}'),
+            '$back4appBaseUrl/classes/RideRequest?where=${Uri.encodeComponent(jsonEncode(queryJson))}&include=assignedDriverId'),
         headers: {
           'X-Parse-Application-Id': appId,
           'X-Parse-REST-API-Key': restApiKey,
@@ -152,6 +147,7 @@ class DriverService {
         print('Poll Ride Requests Response: $data');
         if (data['results'] != null && data['results'].isNotEmpty) {
           final requestData = data['results'][0];
+          print('Processing Ride Request: $requestData');
           final newRideRequest = RideRequest.fromJson({
             'objectId': requestData['objectId'] ?? '',
             'riderId': requestData['riderId']?['objectId'] ?? 'Unknown',
@@ -172,9 +168,12 @@ class DriverService {
           );
 
           final status = requestData['status'];
+          final assignedDriverId =
+              requestData['assignedDriverId']?['objectId'] ?? 'null';
           print('Ride status from backend: $status');
-          if (status == 'pending') {
-            ref.read(rideStatusProvider.notifier).state = RideStatus.incoming;
+          print('Assigned Driver ID from backend: $assignedDriverId');
+          if (status == 'assigned') {
+            ref.read(rideStatusProvider.notifier).state = RideStatus.assigned;
           } else if (status == 'accepted') {
             ref.read(rideStatusProvider.notifier).state = RideStatus.accepted;
           } else if (status == 'start') {
@@ -189,7 +188,7 @@ class DriverService {
           print('No ride requests found for driverId: $driverId');
           if (ref.read(rideRequestProvider) != null &&
               [
-                RideStatus.incoming,
+                RideStatus.assigned,
                 RideStatus.accepted,
                 RideStatus.start,
                 RideStatus.onroute
@@ -222,37 +221,83 @@ class DriverService {
     required String driverId,
   }) async {
     try {
-      final updateJson = {
-        'status': 'accepted',
-        'assignedDriverId': {
-          '__type': 'Pointer',
-          'className': '_User',
-          'objectId': driverId,
+      final normalizedDriverId = driverId.trim();
+      print('Normalized Client Driver ID: $normalizedDriverId');
+
+      // Fetch ride request
+      final queryResponse = await http.get(
+        Uri.parse(
+            '$back4appBaseUrl/classes/RideRequest/$objectId?include=assignedDriverId'),
+        headers: {
+          'X-Parse-Application-Id': appId,
+          'X-Parse-REST-API-Key': restApiKey,
         },
-      };
-      print('Accept Ride Request Payload: $updateJson');
-      final response = await http.put(
-        Uri.parse('$back4appBaseUrl/classes/RideRequest/$objectId'),
+      );
+
+      if (queryResponse.statusCode == 200) {
+        final rideData = jsonDecode(queryResponse.body);
+        final backendDriverId =
+            rideData['assignedDriverId']?['objectId'] ?? 'null';
+        final rideStatus = rideData['status'] ?? 'unknown';
+        print('Backend Assigned Driver ID: $backendDriverId');
+        print('Ride Status: $rideStatus');
+        print('Ride Request ID: $objectId');
+        if (rideStatus != 'assigned') {
+          ref.read(driverServiceProvider)._clearRideState();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Ride is no longer available.')),
+          );
+          return;
+        }
+        if (backendDriverId != normalizedDriverId) {
+          ref.read(driverServiceProvider)._clearRideState();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Ride assigned to another driver.')),
+          );
+          return;
+        }
+      } else {
+        print('Error fetching ride request: ${queryResponse.body}');
+        throw Exception(
+            'Failed to fetch ride request: ${queryResponse.statusCode}');
+      }
+
+      final response = await http.post(
+        Uri.parse('$back4appBaseUrl/functions/acceptRideRequest'),
         headers: {
           'X-Parse-Application-Id': appId,
           'X-Parse-REST-API-Key': restApiKey,
           'Content-Type': 'application/json',
         },
-        body: jsonEncode(updateJson),
+        body: jsonEncode({
+          'requestId': objectId,
+          'driverId': normalizedDriverId,
+        }),
       );
-      if (response.statusCode != 200) {
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        print('Accept Ride Response: $data');
+        if (data['result']['success']) {
+          ref.read(rideStatusProvider.notifier).state = RideStatus.accepted;
+        } else {
+          throw Exception(
+              'Failed to accept ride: ${data['error'] ?? 'Unknown error'}');
+        }
+      } else {
         final errorBody = jsonDecode(response.body);
         print('Accept Ride Error: $errorBody');
         throw Exception(
             'Failed to accept ride: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
       }
-      print('Accept Ride Response: ${jsonDecode(response.body)}');
-      ref.read(rideStatusProvider.notifier).state = RideStatus.accepted;
     } catch (e) {
       print('Error accepting ride: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error accepting ride: $e')),
-      );
+      if (context.mounted) {
+        // Added from past conversation
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error accepting ride: $e')),
+        );
+      }
       rethrow;
     }
   }
@@ -260,29 +305,37 @@ class DriverService {
   Future<void> rejectRideRequest({
     required BuildContext context,
     required String objectId,
+    required String driverId,
   }) async {
     try {
-      final response = await http.put(
-        Uri.parse('$back4appBaseUrl/classes/RideRequest/$objectId'),
+      final response = await http.post(
+        Uri.parse('$back4appBaseUrl/functions/rejectRideRequest'),
         headers: {
           'X-Parse-Application-Id': appId,
           'X-Parse-REST-API-Key': restApiKey,
           'Content-Type': 'application/json',
         },
         body: jsonEncode({
-          'status': 'rejected',
-          'assignedDriverId': null,
+          'requestId': objectId,
+          'driverId': driverId,
         }),
       );
 
-      if (response.statusCode != 200) {
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        print('Reject Ride Response: $data');
+        if (data['result']['success']) {
+          _clearRideState();
+        } else {
+          throw Exception(
+              'Failed to reject ride: ${data['error'] ?? 'Unknown error'}');
+        }
+      } else {
         final errorBody = jsonDecode(response.body);
         print('Reject Ride Error: $errorBody');
         throw Exception(
             'Failed to reject ride: ${errorBody['error'] ?? 'Unknown error'} (Code: ${response.statusCode})');
       }
-      print('Reject Ride Response: ${jsonDecode(response.body)}');
-      _clearRideState();
     } catch (e) {
       print('Error rejecting ride: $e');
       ScaffoldMessenger.of(context).showSnackBar(
@@ -501,7 +554,7 @@ class DriverConsolePage extends HookConsumerWidget {
       if (!isOnline ||
           driverId == null ||
           position == null ||
-          ![RideStatus.none, RideStatus.incoming].contains(rideStatus)) {
+          ![RideStatus.none, RideStatus.assigned].contains(rideStatus)) {
         ridePollTimer.value?.cancel();
         isRidePolling.value = false;
         return null;
@@ -533,7 +586,7 @@ class DriverConsolePage extends HookConsumerWidget {
       ridePollTimer.value =
           Timer.periodic(const Duration(seconds: 5), (_) async {
         if (!isRidePolling.value ||
-            ![RideStatus.none, RideStatus.incoming]
+            ![RideStatus.none, RideStatus.assigned]
                 .contains(ref.read(rideStatusProvider))) {
           ridePollTimer.value?.cancel();
           isRidePolling.value = false;
@@ -809,11 +862,11 @@ class DriverConsolePage extends HookConsumerWidget {
     String nextButtonText;
     RideStatus? nextState;
     String? nextBackendStatus;
-    bool showRejectButton = rideStatus == RideStatus.incoming;
+    bool showRejectButton = rideStatus == RideStatus.assigned;
 
     switch (rideStatus) {
-      case RideStatus.incoming:
-        statusText = "New Ride Request";
+      case RideStatus.assigned:
+        statusText = "New Ride Assigned";
         nextButtonText = "Accept";
         nextState = RideStatus.accepted;
         nextBackendStatus = null;
@@ -901,6 +954,7 @@ class DriverConsolePage extends HookConsumerWidget {
                         await ref.read(driverServiceProvider).rejectRideRequest(
                               context: context,
                               objectId: request.objectId!,
+                              driverId: driverId,
                             );
                       },
                       style: ElevatedButton.styleFrom(
