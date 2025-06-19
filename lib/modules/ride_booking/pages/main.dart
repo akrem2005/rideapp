@@ -23,6 +23,52 @@ const String restApiKey = "hoH5efGxj37mG5fj3MQq2nDxXceK3VVsoW9csD5z";
 // Enums
 enum RideStatus { none, pending, accepted, start, onroute, finished }
 
+// Ride History Model
+class RideHistoryEntry {
+  final String id;
+  final String riderId;
+  final String pickup;
+  final String destination;
+  final String carType;
+  final double fare;
+  final String status;
+  final DateTime timestamp;
+
+  RideHistoryEntry({
+    required this.id,
+    required this.riderId,
+    required this.pickup,
+    required this.destination,
+    required this.carType,
+    required this.fare,
+    required this.status,
+    required this.timestamp,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'riderId': riderId,
+        'pickup': pickup,
+        'destination': destination,
+        'carType': carType,
+        'fare': fare,
+        'status': status,
+        'timestamp': timestamp.toIso8601String(),
+      };
+
+  factory RideHistoryEntry.fromJson(Map<String, dynamic> json) =>
+      RideHistoryEntry(
+        id: json['id'],
+        riderId: json['riderId'],
+        pickup: json['pickup'],
+        destination: json['destination'],
+        carType: json['carType'],
+        fare: json['fare'].toDouble(),
+        status: json['status'],
+        timestamp: DateTime.parse(json['timestamp']),
+      );
+}
+
 // Styles
 class RideRequestPageStyles {
   static const Color primaryColor = Color(0xFF37474F);
@@ -77,6 +123,21 @@ class RideRequestService {
   final Ref ref;
 
   RideRequestService(this.ref);
+
+  Future<void> _saveRideHistory(RideHistoryEntry entry) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final historyKey = 'ride_history_${entry.riderId}';
+      final historyJson = prefs.getString(historyKey) ?? '[]';
+      final List<dynamic> historyList = jsonDecode(historyJson);
+      historyList.add(entry.toJson());
+      await prefs.setString(historyKey, jsonEncode(historyList));
+      print('Ride history saved successfully for riderId: ${entry.riderId}');
+    } catch (e) {
+      print(
+          'Error saving ride history for riderId: ${entry.riderId}, Error: $e');
+    }
+  }
 
   Future<Map<String, dynamic>?> fetchDriverDetails(String driverId) async {
     try {
@@ -244,6 +305,26 @@ class RideRequestService {
                 'cancelled': RideStatus.none,
               }[status] ??
               RideStatus.none;
+
+          // Save to history when ride starts or finishes
+          if (newStatus == RideStatus.start ||
+              newStatus == RideStatus.finished) {
+            final prefs = await SharedPreferences.getInstance();
+            final riderId = prefs.getString('userObjectId') ?? '';
+            final fares = ref.read(fareProvider);
+            final fare = fares[result['carType']] ?? 0.0;
+            final entry = RideHistoryEntry(
+              id: requestId,
+              riderId: riderId,
+              pickup: result['pickup'] ?? '',
+              destination: result['destination'] ?? '',
+              carType: result['carType'] ?? '',
+              fare: fare,
+              status: status,
+              timestamp: DateTime.now().toUtc(),
+            );
+            await _saveRideHistory(entry);
+          }
 
           ref.read(rideStatusProvider.notifier).state = newStatus;
 
