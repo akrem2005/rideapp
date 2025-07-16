@@ -138,7 +138,7 @@ class DriverVerifyPage extends HookConsumerWidget {
                 appContext: context,
                 length: 4,
                 onChanged: (value) => code.value = value.trim(),
-                keyboardType: TextInputType.number,
+                keyboardType: TextInputType.text,
                 textStyle: const TextStyle(fontSize: 20),
                 enableActiveFill: true,
                 pinTheme: PinTheme(

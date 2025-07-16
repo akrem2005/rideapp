@@ -806,7 +806,7 @@ class DriverConsolePage extends HookConsumerWidget {
                 SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    "John Doe",
+                    "Welcome",
                     style: TextStyle(
                         color: Colors.white,
                         fontSize: 24,
