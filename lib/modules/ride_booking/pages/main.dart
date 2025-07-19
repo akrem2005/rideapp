@@ -96,6 +96,11 @@ class RideRequestPageStyles {
     fontSize: 16,
     color: errorColor,
   );
+  static const TextStyle countdownStyle = TextStyle(
+    fontSize: 18,
+    fontWeight: FontWeight.bold,
+    color: primaryColor,
+  );
   static const double spacing = 16;
   static const double borderRadius = 12;
 }
@@ -780,25 +785,29 @@ class RideRequestPage extends HookConsumerWidget {
         'name': 'Economy',
         'seats': '4 seats',
         'icon': 'lib/shared/assets/economy.png',
-        'eta': '5-10 mins'
+        'eta': '5-10 mins',
+        'etaSeconds': 480, // Average of 8 minutes
       },
       {
         'name': 'Basic',
         'seats': '4 seats',
         'icon': 'lib/shared/assets/basic.png',
-        'eta': '6-12 mins'
+        'eta': '6-12 mins',
+        'etaSeconds': 540, // Average of 9 minutes
       },
       {
         'name': 'Executive',
         'seats': '4 seats',
         'icon': 'lib/shared/assets/executive.png',
-        'eta': '4-8 mins'
+        'eta': '4-8 mins',
+        'etaSeconds': 360, // Average of 6 minutes
       },
       {
         'name': 'Minivan',
         'seats': '6 seats',
         'icon': 'lib/shared/assets/minivan.png',
-        'eta': '10-15 mins'
+        'eta': '10-15 mins',
+        'etaSeconds': 750, // Average of 12.5 minutes
       },
     ];
 
@@ -815,10 +824,11 @@ class RideRequestPage extends HookConsumerWidget {
             Text("Available Cars", style: RideRequestPageStyles.titleStyle),
             const SizedBox(height: RideRequestPageStyles.spacing),
             ...cars.map((car) {
-              final name = car['name']!;
+              final name = car['name'] as String; // Explicit cast to String
               final fare = fares[name]?.toStringAsFixed(2) ?? '---';
+              final iconPath = car['icon'] as String; // Explicit cast to String
               return ListTile(
-                leading: Image.asset(car['icon']!, width: 40),
+                leading: Image.asset(iconPath, width: 40),
                 title: Text(name,
                     style: RideRequestPageStyles.titleStyle
                         .copyWith(fontSize: 18)),
@@ -841,7 +851,7 @@ class RideRequestPage extends HookConsumerWidget {
                         .read(rideRequestServiceProvider)
                         .submitRideRequest(
                           context: context,
-                          carType: name,
+                          carType: name, // Ensure name is a String
                           pickup: pickup,
                           destination: destination,
                           pickupPosition: userPosition,
@@ -854,10 +864,17 @@ class RideRequestPage extends HookConsumerWidget {
                         destination: destination,
                         carType: name,
                         fares: fares,
+                        etaSeconds: car['etaSeconds'] as int,
                       );
                     }
                   } catch (e) {
                     // Error handled in submitRideRequest
+                    print('Error submitting ride request: $e');
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text('Error: $e',
+                              style: RideRequestPageStyles.errorStyle)));
+                    }
                   }
                 },
               );
@@ -875,6 +892,7 @@ class RideRequestPage extends HookConsumerWidget {
     required String destination,
     required String? carType,
     required Map<String, double> fares,
+    required int etaSeconds,
   }) {
     if (carType == null) {
       if (context.mounted) {
@@ -900,6 +918,7 @@ class RideRequestPage extends HookConsumerWidget {
           destination: destination,
           carType: carType,
           fares: fares,
+          etaSeconds: etaSeconds,
         ),
       );
     }
@@ -917,102 +936,137 @@ class RideRequestPage extends HookConsumerWidget {
     String? carType,
     String? pickup,
     String? destination,
-  }) =>
-      Padding(
-        padding: const EdgeInsets.all(RideRequestPageStyles.spacing),
-        child: Consumer(
-          builder: (context, ref, child) {
-            final driverDetails = ref.watch(driverDetailsProvider);
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                icon,
+    int? etaSeconds,
+  }) {
+    final etaCountdown = useState(etaSeconds ?? 0);
+
+    useEffect(() {
+      if (etaSeconds != null && etaCountdown.value > 0) {
+        Timer? timer;
+        timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+          if (etaCountdown.value > 0) {
+            etaCountdown.value--;
+          } else {
+            timer.cancel();
+          }
+        });
+        return timer.cancel;
+      }
+      return null;
+    }, [etaSeconds]);
+
+    String formatDuration(int seconds) {
+      if (seconds <= 0) return '00:00';
+      final minutes = (seconds ~/ 60).toString().padLeft(2, '0');
+      final secs = (seconds % 60).toString().padLeft(2, '0');
+      return '$minutes:$secs';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.all(RideRequestPageStyles.spacing),
+      child: Consumer(
+        builder: (context, ref, child) {
+          final driverDetails = ref.watch(driverDetailsProvider);
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              icon,
+              const SizedBox(height: RideRequestPageStyles.spacing),
+              Text(title,
+                  style: RideRequestPageStyles.titleStyle,
+                  textAlign: TextAlign.center),
+              const SizedBox(height: RideRequestPageStyles.spacing / 2),
+              Text(
+                  subtitle +
+                      (rideStatus == RideStatus.accepted ||
+                              rideStatus == RideStatus.start
+                          ? (pickup ?? 'Unknown location')
+                          : (destination ?? 'Unknown destination')),
+                  style: RideRequestPageStyles.subtitleStyle,
+                  textAlign: TextAlign.center),
+              if (driverDetails != null &&
+                  rideStatus != RideStatus.pending) ...[
                 const SizedBox(height: RideRequestPageStyles.spacing),
-                Text(title,
-                    style: RideRequestPageStyles.titleStyle,
-                    textAlign: TextAlign.center),
-                const SizedBox(height: RideRequestPageStyles.spacing / 2),
-                Text(
-                    subtitle +
-                        (rideStatus == RideStatus.accepted ||
-                                rideStatus == RideStatus.start
-                            ? (pickup ?? 'Unknown location')
-                            : (destination ?? 'Unknown destination')),
-                    style: RideRequestPageStyles.subtitleStyle,
-                    textAlign: TextAlign.center),
-                if (driverDetails != null &&
-                    rideStatus != RideStatus.pending) ...[
-                  const SizedBox(height: RideRequestPageStyles.spacing),
-                  ListTile(
-                    leading: const CircleAvatar(
-                        radius: 30,
-                        backgroundImage:
-                            AssetImage('lib/shared/assets/driver_avatar.png')),
-                    title: Text(driverDetails['name'] ?? 'Unknown Driver',
-                        style: RideRequestPageStyles.titleStyle
-                            .copyWith(fontSize: 18)),
-                    subtitle: Text(
-                        "$carType • ${driverDetails['rating']?.toStringAsFixed(1) ?? 'N/A'} ★",
-                        style: RideRequestPageStyles.subtitleStyle),
-                  ),
-                ],
-                if (showCancel && requestId != null) ...[
-                  const SizedBox(height: RideRequestPageStyles.spacing),
-                  _buildPrimaryButton(
-                    label: 'Cancel Ride',
-                    backgroundColor: RideRequestPageStyles.errorColor,
-                    onPressed: () => showDialog(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text("Cancel Ride?"),
-                        content: const Text(
-                            "Are you sure you want to cancel this ride request?"),
-                        actions: [
-                          TextButton(
-                              onPressed: () => Navigator.pop(context),
-                              child: const Text("No")),
-                          TextButton(
-                            onPressed: () async {
-                              Navigator.pop(context); // Close dialog
-                              await ref
-                                  .read(rideRequestServiceProvider)
-                                  .cancelRideRequest(
-                                      context: context, objectId: requestId);
-                              if (context.mounted) {
-                                Navigator.pop(context); // Close bottom sheet
-                              }
-                            },
-                            child: const Text("Yes",
-                                style: TextStyle(
-                                    color: RideRequestPageStyles.errorColor)),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-                if (!showCancel &&
-                    driverDetails != null &&
-                    carType != null &&
-                    rideStatus != RideStatus.finished) ...[
-                  const SizedBox(height: RideRequestPageStyles.spacing),
-                  _buildPrimaryButton(
-                    label: 'Contact Driver',
-                    onPressed: () {
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                                content: Text("Contacting driver...")));
-                      }
-                    },
+                ListTile(
+                  leading: const CircleAvatar(
+                      radius: 30,
+                      backgroundImage:
+                          AssetImage('lib/shared/assets/driver_avatar.png')),
+                  title: Text(driverDetails['name'] ?? 'Unknown Driver',
+                      style: RideRequestPageStyles.titleStyle
+                          .copyWith(fontSize: 18)),
+                  subtitle: Text(
+                      "$carType • ${driverDetails['rating']?.toStringAsFixed(1) ?? 'N/A'} ★",
+                      style: RideRequestPageStyles.subtitleStyle),
+                ),
+                if (rideStatus == RideStatus.accepted ||
+                    rideStatus == RideStatus.start ||
+                    rideStatus == RideStatus.onroute) ...[
+                  const SizedBox(height: RideRequestPageStyles.spacing / 2),
+                  Text(
+                    'Estimated Arrival: ${formatDuration(etaCountdown.value)}',
+                    style: RideRequestPageStyles.countdownStyle,
+                    textAlign: TextAlign.center,
                   ),
                 ],
               ],
-            );
-          },
-        ),
-      );
+              if (showCancel && requestId != null) ...[
+                const SizedBox(height: RideRequestPageStyles.spacing),
+                _buildPrimaryButton(
+                  label: 'Cancel Ride',
+                  backgroundColor: RideRequestPageStyles.errorColor,
+                  onPressed: () => showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text("Cancel Ride?"),
+                      content: const Text(
+                          "Are you sure you want to cancel this ride request?"),
+                      actions: [
+                        TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text("No")),
+                        TextButton(
+                          onPressed: () async {
+                            Navigator.pop(context); // Close dialog
+                            await ref
+                                .read(rideRequestServiceProvider)
+                                .cancelRideRequest(
+                                    context: context, objectId: requestId);
+                            if (context.mounted) {
+                              Navigator.pop(context); // Close bottom sheet
+                            }
+                          },
+                          child: const Text("Yes",
+                              style: TextStyle(
+                                  color: RideRequestPageStyles.errorColor)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+              if (!showCancel &&
+                  driverDetails != null &&
+                  carType != null &&
+                  rideStatus != RideStatus.finished) ...[
+                const SizedBox(height: RideRequestPageStyles.spacing),
+                _buildPrimaryButton(
+                  label: 'Contact Driver',
+                  onPressed: () {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                          content: Text("Contacting driver...")));
+                    }
+                  },
+                ),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
 
   Widget _buildPaymentSheet(BuildContext context, String fare) => HookConsumer(
         builder: (context, ref, child) {
@@ -1361,6 +1415,7 @@ class StatusBottomSheet extends HookConsumerWidget {
   final String destination;
   final String carType;
   final Map<String, double> fares;
+  final int etaSeconds;
 
   const StatusBottomSheet({
     super.key,
@@ -1369,6 +1424,7 @@ class StatusBottomSheet extends HookConsumerWidget {
     required this.destination,
     required this.carType,
     required this.fares,
+    required this.etaSeconds,
   });
 
   @override
@@ -1408,6 +1464,7 @@ class StatusBottomSheet extends HookConsumerWidget {
                     carType: carType,
                     pickup: pickup,
                     destination: destination,
+                    etaSeconds: etaSeconds,
                   ),
       ),
     );
