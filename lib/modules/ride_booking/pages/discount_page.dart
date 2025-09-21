@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:parse_server_sdk_flutter/parse_server_sdk_flutter.dart';
 
-// Model for discount code
 class DiscountCode {
   final String objectId;
   final String title;
@@ -57,52 +56,14 @@ class _DiscountPageState extends State<DiscountPage> {
   @override
   void initState() {
     super.initState();
-    _fetchDiscountCodes();
     _searchController.addListener(_filterCodes);
+    _fetchDiscountCodes(); // fetch data on load
   }
 
   @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
-  }
-
-  Future<void> _fetchDiscountCodes() async {
-    try {
-      setState(() {
-        _isLoading = true;
-        _hasError = false;
-      });
-
-      final query = QueryBuilder<ParseObject>(ParseObject('DiscountCode'))
-        ..orderByDescending('createdAt');
-      final response = await query.query();
-
-      if (!mounted) return;
-
-      setState(() {
-        _isLoading = false;
-        if (response.success && response.results != null) {
-          discountCodes = response.results!
-              .map((e) => DiscountCode.fromParse(e as ParseObject))
-              .toList();
-          filteredCodes = discountCodes;
-        } else {
-          _hasError = true;
-          _showSnackBar(
-            'Failed to fetch discount codes: ${response.error?.message ?? "Unknown error"}',
-            isError: true,
-          );
-        }
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-        _hasError = true;
-      });
-      _showSnackBar('An error occurred: $e', isError: true);
-    }
   }
 
   void _filterCodes() {
@@ -116,87 +77,126 @@ class _DiscountPageState extends State<DiscountPage> {
     });
   }
 
-  void _showSnackBar(String message, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          message,
-          style: const TextStyle(color: Colors.white),
+  Future<void> _fetchDiscountCodes() async {
+    setState(() {
+      _isLoading = true;
+      _hasError = false;
+    });
+
+    try {
+      final query = QueryBuilder<ParseObject>(ParseObject('DiscountCode'))
+        ..orderByDescending('createdAt');
+
+      final response = await query.query();
+
+      if (!mounted) return;
+
+      if (response.success && response.results != null) {
+        discountCodes = response.results!
+            .map((e) => DiscountCode.fromParse(e as ParseObject))
+            .toList();
+        filteredCodes = discountCodes;
+      } else {
+        _hasError = true;
+        discountCodes = [];
+        filteredCodes = [];
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed to fetch discount codes: ${response.error?.message ?? "Unknown error"}',
+            ),
+            backgroundColor: Colors.red[700],
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _hasError = true;
+      discountCodes = [];
+      filteredCodes = [];
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('An error occurred: $e'),
+          backgroundColor: Colors.red[700],
         ),
-        backgroundColor: isError ? Colors.red[700] : Colors.green[700],
-        duration: const Duration(seconds: 3),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        margin: const EdgeInsets.all(16),
-        action: SnackBarAction(
-          label: 'Dismiss',
-          textColor: Colors.white,
-          onPressed: () {
-            ScaffoldMessenger.of(context).hideCurrentSnackBar();
-          },
-        ),
-      ),
-    );
+      );
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   void _copyToClipboard(String code) {
     Clipboard.setData(ClipboardData(text: code));
-    _showSnackBar('Code "$code" copied to clipboard!');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Code "$code" copied to clipboard!'),
+        backgroundColor: const Color(0xFFF5E10E),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Theme(
-      data: Theme.of(context).copyWith(
-        primaryColor: Color(0xFFFFA500),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Color(0xFFFFA500),
-          primary: Color(0xFFFFA500),
-          secondary: Colors.blue[100],
-        ),
-        cardTheme: CardTheme(
-          elevation: 2,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        ),
-      ),
-      child: Scaffold(
-        appBar: AppBar(
-          centerTitle: true,
-          title: const Text(
-            'Discount Codes',
-            style: TextStyle(fontWeight: FontWeight.w600),
-          ),
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () => Navigator.pop(context),
-          ),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              tooltip: 'Refresh',
-              onPressed: _isLoading ? null : _fetchDiscountCodes,
-            ),
-          ],
-          elevation: 0,
-          backgroundColor: Color(0xFFFFA500),
-          foregroundColor: Colors.white,
-        ),
-        body: Column(
+    const primaryTextColor = Color(0xFF21201E);
+    const greyBackground = Color(0xFFF5F4F2);
+    const yellowAccent = Color(0xFFF5E10E);
+
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Column(
           children: [
+            // Top back arrow and title
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon:
+                        const Icon(Icons.arrow_back, color: Color(0xFF21201E)),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Discount Codes',
+                    style: TextStyle(
+                      color: Color(0xFF21201E),
+                      fontSize: 20,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Search field
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: TextField(
+                controller: _searchController,
+                decoration: InputDecoration(
+                  hintText: 'Search discount codes...',
+                  filled: true,
+                  fillColor: greyBackground,
+                  prefixIcon: const Icon(Icons.search),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Discount codes list
             Expanded(
               child: _isLoading
-                  ? const Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          CircularProgressIndicator(),
-                          SizedBox(height: 16),
-                          Text('Loading discounts...'),
-                        ],
-                      ),
-                    )
+                  ? const Center(child: CircularProgressIndicator())
                   : _hasError
                       ? Center(
                           child: Column(
@@ -238,50 +238,64 @@ class _DiscountPageState extends State<DiscountPage> {
                             )
                           : RefreshIndicator(
                               onRefresh: _fetchDiscountCodes,
+                              color: yellowAccent,
                               child: ListView.builder(
                                 padding: const EdgeInsets.only(bottom: 16),
                                 itemCount: filteredCodes.length,
                                 itemBuilder: (context, index) {
                                   final discount = filteredCodes[index];
-                                  return AnimatedScale(
-                                    scale: 1.0,
-                                    duration: const Duration(milliseconds: 200),
-                                    child: Card(
-                                      child: ListTile(
-                                        contentPadding:
-                                            const EdgeInsets.all(16),
-                                        title: Text(
-                                          discount.title,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                            fontSize: 16,
-                                          ),
+                                  return Card(
+                                    color: greyBackground,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    margin: const EdgeInsets.symmetric(
+                                        horizontal: 16, vertical: 8),
+                                    child: ListTile(
+                                      contentPadding: const EdgeInsets.all(16),
+                                      title: Text(
+                                        discount.title,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 16,
                                         ),
-                                        subtitle: Padding(
-                                          padding:
-                                              const EdgeInsets.only(top: 8),
-                                          child: Text(
-                                            'Discount: ${discount.amount.toStringAsFixed(1)}% | Code: ${discount.code}',
-                                            style: TextStyle(
-                                              color: Colors.grey[600],
-                                            ),
-                                          ),
+                                      ),
+                                      subtitle: Padding(
+                                        padding: const EdgeInsets.only(top: 8),
+                                        child: Text(
+                                          'Code: ${discount.code}',
+                                          style: TextStyle(
+                                              color: primaryTextColor
+                                                  .withOpacity(0.7)),
                                         ),
-                                        trailing: IconButton(
-                                          icon: const Icon(Icons.copy),
-                                          color: Color(0xFFFFA500),
-                                          tooltip: 'Copy Code',
-                                          onPressed: () =>
-                                              _copyToClipboard(discount.code),
-                                        ),
-                                        onTap: () =>
+                                      ),
+                                      trailing: IconButton(
+                                        icon: const Icon(Icons.copy),
+                                        color: yellowAccent,
+                                        onPressed: () =>
                                             _copyToClipboard(discount.code),
                                       ),
+                                      onTap: () =>
+                                          _copyToClipboard(discount.code),
                                     ),
                                   );
                                 },
                               ),
                             ),
+            ),
+
+            // Bottom copyright
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+              child: Text(
+                "© All rights reserved",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.grey[600],
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ),
           ],
         ),

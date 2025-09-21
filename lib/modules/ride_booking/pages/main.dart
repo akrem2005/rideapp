@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
@@ -13,8 +14,11 @@ import 'package:http/http.dart' as http;
 import '../model/ride_request_model.dart';
 import '../../auth/pages/get_started_page.dart';
 import 'discount_page.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'order_history_page.dart';
 import 'setting_page.dart';
+
+// import 'package:app_settings/app_settings.dart';
 
 // Constants
 const String back4appBaseUrl = 'https://parseapi.back4app.com';
@@ -142,6 +146,28 @@ class RideRequestService {
     } catch (e) {
       print(
           'Error saving ride history for riderId: ${entry.riderId}, Error: $e');
+    }
+  }
+
+  Future<void> updateDriverRating(String driverObjectId, int rating) async {
+    final url = '$back4appBaseUrl/classes/Driver/$driverObjectId';
+    try {
+      final response = await http.put(
+        Uri.parse(url),
+        headers: {
+          'X-Parse-Application-Id': appId,
+          'X-Parse-REST-API-Key': restApiKey,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'rating': rating}),
+      );
+      if (response.statusCode == 200) {
+        print('Driver rating updated successfully');
+      } else {
+        print('Failed to update driver rating: ${response.body}');
+      }
+    } catch (e) {
+      print('Error updating driver rating: $e');
     }
   }
 
@@ -311,26 +337,6 @@ class RideRequestService {
                 'cancelled': RideStatus.none,
               }[status] ??
               RideStatus.none;
-
-          // Save to history when ride starts or finishes
-          if (newStatus == RideStatus.start ||
-              newStatus == RideStatus.finished) {
-            final prefs = await SharedPreferences.getInstance();
-            final riderId = prefs.getString('userObjectId') ?? '';
-            final fares = ref.read(fareProvider);
-            final fare = fares[result['carType']] ?? 0.0;
-            final entry = RideHistoryEntry(
-              id: requestId,
-              riderId: riderId,
-              pickup: result['pickup'] ?? '',
-              destination: result['destination'] ?? '',
-              carType: result['carType'] ?? '',
-              fare: fare,
-              status: status,
-              timestamp: DateTime.now().toUtc(),
-            );
-            await _saveRideHistory(entry);
-          }
 
           ref.read(rideStatusProvider.notifier).state = newStatus;
 
@@ -578,91 +584,191 @@ class RideRequestPage extends HookConsumerWidget {
   }) =>
       SizedBox(
         width: double.infinity,
-        child: ElevatedButton(
-          onPressed: onPressed,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: backgroundColor ?? const Color(0xFFFFA500),
-            padding: const EdgeInsets.symmetric(
-                vertical: RideRequestPageStyles.spacing),
-            shape: RoundedRectangleBorder(
-                borderRadius:
-                    BorderRadius.circular(RideRequestPageStyles.borderRadius)),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: backgroundColor == null
+                ? const LinearGradient(
+                    colors: [
+                      Color(0xFFFFA500), // Warm Orange
+                      Color.fromARGB(255, 255, 136, 0), // Orange-Red
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  )
+                : null,
+            color: backgroundColor, // Fallback if backgroundColor is passed
+            borderRadius:
+                BorderRadius.circular(RideRequestPageStyles.borderRadius),
           ),
-          child: Text(label, style: RideRequestPageStyles.buttonStyle),
+          child: ElevatedButton(
+            onPressed: onPressed,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.transparent,
+              shadowColor: Colors.transparent,
+              padding: const EdgeInsets.symmetric(
+                  vertical: RideRequestPageStyles.spacing),
+              shape: RoundedRectangleBorder(
+                borderRadius:
+                    BorderRadius.circular(RideRequestPageStyles.borderRadius),
+              ),
+            ),
+            child: Text(label, style: RideRequestPageStyles.buttonStyle),
+          ),
         ),
       );
 
-  Widget _buildSideNavBar(BuildContext context) => Drawer(
+  Drawer _buildSideNavBar(BuildContext context) => Drawer(
+        backgroundColor: Colors.white,
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.only(
             topRight: Radius.circular(RideRequestPageStyles.borderRadius),
             bottomRight: Radius.circular(RideRequestPageStyles.borderRadius),
           ),
         ),
-        child: Column(
-          children: [
-            DrawerHeader(
-              decoration: const BoxDecoration(color: Color(0xFFFFA500)),
-              child: Row(
-                children: [
-                  const CircleAvatar(
-                      radius: 40,
-                      backgroundImage:
-                          AssetImage('lib/shared/assets/user.png')),
-                  const SizedBox(width: RideRequestPageStyles.spacing),
-                  Expanded(
-                    child: Text(
-                      "Welcome",
-                      style: RideRequestPageStyles.titleStyle.copyWith(
-                          color: RideRequestPageStyles.backgroundColor),
+        child: SafeArea(
+          child: Column(
+            children: [
+              const SizedBox(height: 20),
+              // Back arrow row
+              Align(
+                alignment: Alignment.centerLeft,
+                child: IconButton(
+                  icon: const Icon(Icons.arrow_back, color: Color(0xFF21201E)),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ),
+
+              // Profile info row
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    const SizedBox(height: 20),
+                    const CircleAvatar(
+                      radius: 28,
+                      backgroundImage: AssetImage('lib/shared/assets/user.png'),
                     ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Akrem",
+                            style: RideRequestPageStyles.titleStyle.copyWith(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                              color: const Color(0xFF21201E),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            "+251 929175653",
+                            style: RideRequestPageStyles.subtitleStyle.copyWith(
+                              color: const Color(0xFF21201E).withOpacity(0.6),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  children: [
+                    // Merge: Enable Notifications + Discounts & Gifts
+                    _buildGroup([
+                      _buildDrawerItem(context, CupertinoIcons.bell,
+                          'Enable notifications', () => {}),
+                      _buildDrawerItem(
+                          context, CupertinoIcons.gift, 'Discounts & gifts',
+                          () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const DiscountPage(),
+                          ),
+                        );
+                      }),
+                    ]),
+
+                    // History (alone)
+                    _buildGroup([
+                      _buildDrawerItem(context, CupertinoIcons.time, 'History',
+                          () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const OrderHistoryPage(),
+                          ),
+                        );
+                      }),
+                      _buildDrawerItem(context, CupertinoIcons.phone,
+                          'Call Center', () => _callPhone(context)),
+                      _buildDrawerItem(context, CupertinoIcons.info_circle,
+                          'About Us', () => _openWebsite(context)),
+                    ]),
+
+                    // Logout (alone)
+                    _buildGroup([
+                      _buildDrawerItem(
+                          context,
+                          CupertinoIcons.square_arrow_right,
+                          'Logout',
+                          () => _logout(context)),
+                    ]),
+                  ],
+                ),
+              ),
+
+              // Bottom Action
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                    16, 16, 16, 32), // extra bottom padding
+                child: Text(
+                  "© All rights reserved",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.grey[600], // grey color
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
                   ),
-                ],
+                ),
               ),
-            ),
-            Expanded(
-              child: ListView(
-                children: [
-                  _buildDrawerItem(context, CupertinoIcons.time, 'Trip Orders',
-                      () {
-                    Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) => const OrderHistoryPage()));
-                  }),
-                  _buildDrawerItem(context, CupertinoIcons.cart, 'Discounts',
-                      () {
-                    Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) => const DiscountPage()));
-                  }),
-                  _buildDrawerItem(context, CupertinoIcons.settings, 'Settings',
-                      () {
-                    Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) => const RiderSettingsPage()));
-                  }),
-                  _buildDrawerItem(
-                      context, CupertinoIcons.question, 'Help', () {}),
-                  _buildDrawerItem(context, CupertinoIcons.arrow_left_circle,
-                      'Logout', () => _logout(context)),
-                ],
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       );
 
+// Drawer item
   Widget _buildDrawerItem(BuildContext context, IconData icon, String title,
           VoidCallback onTap) =>
       ListTile(
-        leading: Icon(icon, color: Colors.grey),
-        title: Text(title,
-            style: RideRequestPageStyles.subtitleStyle
-                .copyWith(color: RideRequestPageStyles.secondaryColor)),
+        leading: Icon(icon, color: const Color(0xFF21201E)),
+        title: Text(
+          title,
+          style: RideRequestPageStyles.subtitleStyle.copyWith(
+            fontSize: 16,
+            fontWeight: FontWeight.w500,
+            color: const Color(0xFF21201E),
+          ),
+        ),
         onTap: onTap,
+      );
+
+// Group wrapper with background
+  Widget _buildGroup(List<Widget> children) => Container(
+        margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF5F4F2),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(children: children),
       );
 
   Future<void> _logout(BuildContext context) async {
@@ -671,6 +777,30 @@ class RideRequestPage extends HookConsumerWidget {
     if (context.mounted) {
       Navigator.pushReplacement(context,
           MaterialPageRoute(builder: (context) => const GetStartedPage()));
+    }
+  }
+
+  Future<void> _callPhone(BuildContext context) async {
+    String number = "0929175653";
+    final Uri uri = Uri(scheme: 'tel', path: number);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    }
+  }
+
+  // Future<void> _openLocationSettings() async {
+  //   AppSettings.openLocationSettings();
+  // }
+
+  // Future<void> _openNotSettings() async {
+  //   AppSettings.openNotificationSettings();
+  // }
+
+  Future<void> _openWebsite(BuildContext) async {
+    String url = "https://google.com";
+    final Uri uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
   }
 
@@ -772,7 +902,106 @@ class RideRequestPage extends HookConsumerWidget {
           ),
         ],
       );
+  // ...existing code...
 
+  void _showRatingDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        final rating = ValueNotifier<int?>(null);
+        return AlertDialog(
+          backgroundColor: const Color(0xFFF5F4F2), // SideNavBar color
+          shape: RoundedRectangleBorder(
+            borderRadius:
+                BorderRadius.circular(RideRequestPageStyles.borderRadius),
+          ),
+          title: Row(
+            children: [
+              Image.asset(
+                'lib/shared/assets/rate.png',
+                width: 40,
+                height: 40,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                "Rate Your Ride",
+                style: RideRequestPageStyles.titleStyle.copyWith(
+                  color: const Color(0xFF21201E),
+                  fontSize: 20,
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              Text(
+                "How was your experience?",
+                style: RideRequestPageStyles.subtitleStyle.copyWith(
+                  color: const Color(0xFF21201E).withOpacity(0.7),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(
+                  5,
+                  (index) => ValueListenableBuilder<int?>(
+                    valueListenable: rating,
+                    builder: (context, value, child) => IconButton(
+                      icon: Icon(
+                        index < (value ?? 0)
+                            ? CupertinoIcons.star_fill
+                            : CupertinoIcons.star,
+                        color: index < (value ?? 0)
+                            ? const Color(0xFF21201E)
+                            : Colors.grey,
+                        size: 32,
+                      ),
+                      onPressed: () => rating.value = index + 1,
+                    ),
+                  ),
+                ),
+              ),
+              ValueListenableBuilder<int?>(
+                valueListenable: rating,
+                builder: (context, value, child) => value != null
+                    ? Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          "Rated $value star${value == 1 ? '' : 's'}!",
+                          style: RideRequestPageStyles.subtitleStyle.copyWith(
+                            color: const Color(0xFF21201E),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.white,
+                backgroundColor: const Color(0xFF21201E),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Done"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+// ...existing code...
   void _showAvailableCars({
     required BuildContext context,
     required WidgetRef ref,
@@ -1068,9 +1297,32 @@ class RideRequestPage extends HookConsumerWidget {
     );
   }
 
-  Widget _buildPaymentSheet(BuildContext context, String fare) => HookConsumer(
+  Widget _buildPaymentSheet(
+    BuildContext context,
+    String fare, {
+    required String pickup,
+    required String destination,
+    required String carType,
+  }) =>
+      HookConsumer(
         builder: (context, ref, child) {
-          final rating = useState<int?>(null);
+          final requestId = ref.read(currentRideRequestIdProvider);
+
+          Future<void> saveHistory() async {
+            final prefs = await SharedPreferences.getInstance();
+            final riderId = prefs.getString('userObjectId') ?? '';
+            final entry = RideHistoryEntry(
+              id: requestId ?? '',
+              riderId: riderId,
+              pickup: pickup,
+              destination: destination,
+              carType: carType,
+              fare: double.tryParse(fare) ?? 0.0,
+              status: 'finished',
+              timestamp: DateTime.now().toUtc(),
+            );
+            await ref.read(rideRequestServiceProvider)._saveRideHistory(entry);
+          }
 
           return Padding(
             padding: const EdgeInsets.all(RideRequestPageStyles.spacing),
@@ -1078,32 +1330,19 @@ class RideRequestPage extends HookConsumerWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                statusConfig[RideStatus.finished]!['icon'] as Widget,
-                const SizedBox(height: RideRequestPageStyles.spacing),
-                Text(statusConfig[RideStatus.finished]!['title'] as String,
-                    style: RideRequestPageStyles.titleStyle,
-                    textAlign: TextAlign.center),
-                const SizedBox(height: RideRequestPageStyles.spacing / 2),
-                Text("Total Fare: $fare Birr",
-                    style: RideRequestPageStyles.titleStyle.copyWith(
-                        fontSize: 18,
-                        color: RideRequestPageStyles.primaryColor)),
-                const SizedBox(height: RideRequestPageStyles.spacing),
-                Text("Select Payment Method",
-                    style: RideRequestPageStyles.subtitleStyle
-                        .copyWith(fontWeight: FontWeight.w500)),
-                const SizedBox(height: RideRequestPageStyles.spacing / 2),
                 ListTile(
                   leading: const Icon(CupertinoIcons.money_dollar,
                       color: RideRequestPageStyles.primaryColor),
                   title: Text("Cash",
                       style: RideRequestPageStyles.titleStyle
                           .copyWith(fontSize: 18)),
-                  onTap: () {
+                  onTap: () async {
                     Navigator.pop(context);
+                    await saveHistory(); // Save history after payment
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                           content: Text("Payment successful via Cash")));
+                      _showRatingDialog(context);
                     }
                   },
                 ),
@@ -1113,44 +1352,16 @@ class RideRequestPage extends HookConsumerWidget {
                   title: Text("Pay with Card",
                       style: RideRequestPageStyles.titleStyle
                           .copyWith(fontSize: 18)),
-                  onTap: () {
+                  onTap: () async {
                     Navigator.pop(context);
+                    await saveHistory(); // Save history after payment
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                           content: Text("Card payment coming soon")));
+                      _showRatingDialog(context);
                     }
                   },
                 ),
-                const SizedBox(height: RideRequestPageStyles.spacing),
-                Text("Rate Your Ride",
-                    style: RideRequestPageStyles.subtitleStyle
-                        .copyWith(fontWeight: FontWeight.w500)),
-                const SizedBox(height: RideRequestPageStyles.spacing / 2),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(
-                    5,
-                    (index) => IconButton(
-                      icon: Icon(
-                        index < (rating.value ?? 0)
-                            ? CupertinoIcons.star_fill
-                            : CupertinoIcons.star,
-                        color: index < (rating.value ?? 0)
-                            ? RideRequestPageStyles.primaryColor
-                            : Colors.grey,
-                        size: 24,
-                      ),
-                      onPressed: () => rating.value = index + 1,
-                    ),
-                  ),
-                ),
-                if (rating.value != null)
-                  Padding(
-                    padding: const EdgeInsets.only(
-                        top: RideRequestPageStyles.spacing / 2),
-                    child: Text("Rated ${rating.value} stars!",
-                        style: RideRequestPageStyles.subtitleStyle),
-                  ),
               ],
             ),
           );
@@ -1238,9 +1449,11 @@ class RideRequestPage extends HookConsumerWidget {
                 ),
                 children: [
                   TileLayer(
-                      urlTemplate:
-                          'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      subdomains: const ['a', 'b', 'c']),
+                    urlTemplate:
+                        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                    subdomains: const ['a', 'b', 'c'],
+                    userAgentPackageName: 'com.example.ride_app',
+                  ),
                   MarkerLayer(
                     markers: [
                       Marker(
@@ -1409,6 +1622,8 @@ class RideRequestPage extends HookConsumerWidget {
 }
 
 // Status Bottom Sheet
+// ...existing code...
+
 class StatusBottomSheet extends HookConsumerWidget {
   final WidgetRef ref;
   final String pickup;
@@ -1447,7 +1662,13 @@ class StatusBottomSheet extends HookConsumerWidget {
         child: rideStatus == RideStatus.none
             ? _buildErrorSheet(context)
             : rideStatus == RideStatus.finished
-                ? RideRequestPage()._buildPaymentSheet(context, totalFare)
+                ? RideRequestPage()._buildPaymentSheet(
+                    context,
+                    totalFare,
+                    pickup: pickup,
+                    destination: destination,
+                    carType: carType,
+                  )
                 : RideRequestPage()._buildStatusSheet(
                     context: context,
                     ref: ref,
@@ -1496,3 +1717,5 @@ class StatusBottomSheet extends HookConsumerWidget {
         ),
       );
 }
+
+// ...existing code...

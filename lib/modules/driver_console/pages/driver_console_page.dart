@@ -12,6 +12,8 @@ import 'package:http/http.dart' as http;
 import '../models/ride_request_model.dart';
 import '../models/driver_location_model.dart';
 import '../../auth/pages/get_started_page.dart';
+import '../../ride_booking/pages/main.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 // Constants
 const String back4appBaseUrl = 'https://parseapi.back4app.com';
@@ -786,68 +788,183 @@ class DriverConsolePage extends HookConsumerWidget {
     );
   }
 
-  Drawer _buildDrawer(BuildContext context) {
-    return Drawer(
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.only(
-          topRight: Radius.circular(30),
-          bottomRight: Radius.circular(30),
+  Drawer _buildDrawer(BuildContext context) => Drawer(
+        backgroundColor: Colors.white,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.only(
+            topRight: Radius.circular(RideRequestPageStyles.borderRadius),
+            bottomRight: Radius.circular(RideRequestPageStyles.borderRadius),
+          ),
         ),
-      ),
-      child: Column(
-        children: [
-          DrawerHeader(
-            decoration: const BoxDecoration(color: Color(0xFFFFA500)),
-            child: Row(
-              children: const [
-                CircleAvatar(
-                    radius: 40,
-                    backgroundImage: AssetImage('lib/shared/assets/user.png')),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    "Welcome",
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold),
+        child: SafeArea(
+          child: Column(
+            children: [
+              const SizedBox(height: 20),
+              // Back arrow row
+              Align(
+                alignment: Alignment.centerLeft,
+                child: IconButton(
+                  icon: const Icon(Icons.arrow_back, color: Color(0xFF21201E)),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ),
+
+              // Profile info row
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    const SizedBox(height: 20),
+                    const CircleAvatar(
+                      radius: 28,
+                      backgroundImage: AssetImage('lib/shared/assets/user.png'),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Akrem",
+                            style: RideRequestPageStyles.titleStyle.copyWith(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                              color: const Color(0xFF21201E),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            "+251 929175653",
+                            style: RideRequestPageStyles.subtitleStyle.copyWith(
+                              color: const Color(0xFF21201E).withOpacity(0.6),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  children: [
+                    // Merge: Enable Notifications + Discounts & Gifts
+                    _buildGroup([
+                      _buildDrawerItem(context, CupertinoIcons.bell,
+                          'Enable notifications', () => {}),
+                      // _buildDrawerItem(
+                      //     context, CupertinoIcons.gift, 'Discounts & gifts',
+                      //     () {
+                      //   Navigator.push(
+                      //     context,
+                      //     MaterialPageRoute(
+                      //       builder: (context) => const DiscountPage(){},
+                      //     ),
+                      //   );
+                      // }),
+                    ]),
+
+                    // History (alone)
+                    _buildGroup([
+                      // _buildDrawerItem(context, CupertinoIcons.time, 'History',
+                      //     () {
+                      //   Navigator.push(
+                      //     context,
+                      //     MaterialPageRoute(
+                      //       builder: (context) => const OrderHistoryPage(),
+                      //     ),
+                      //   );
+                      // }),
+                      _buildDrawerItem(context, CupertinoIcons.phone,
+                          'Call Center', () => _callPhone(context)),
+                      _buildDrawerItem(context, CupertinoIcons.info_circle,
+                          'About Us', () => _openWebsite(context)),
+                    ]),
+
+                    // Logout (alone)
+                    _buildGroup([
+                      _buildDrawerItem(
+                          context,
+                          CupertinoIcons.square_arrow_right,
+                          'Logout',
+                          () => (context)),
+                    ]),
+                  ],
+                ),
+              ),
+
+              // Bottom Action
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                    16, 16, 16, 32), // extra bottom padding
+                child: Text(
+                  "© All rights reserved",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.grey[600], // grey color
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-          Expanded(
-            child: ListView(
-              children: [
-                _drawerItem(context, CupertinoIcons.time, 'Trip Orders', () {}),
-                _drawerItem(context, CupertinoIcons.cart, 'Promotions', () {}),
-                _drawerItem(
-                    context, CupertinoIcons.settings, 'Settings', () {}),
-                _drawerItem(context, CupertinoIcons.question, 'Help', () {}),
-                _drawerItem(context, CupertinoIcons.arrow_left_circle, 'Logout',
-                    () => logout(context)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
+        ),
+      );
+  Future<void> _logout(BuildContext context) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('driverObjectId');
+    if (context.mounted) {
+      Navigator.pushReplacement(context,
+          MaterialPageRoute(builder: (context) => const GetStartedPage()));
+    }
   }
 
-  Widget _drawerItem(
-      BuildContext context, IconData icon, String title, VoidCallback onTap) {
-    return ListTile(
-      leading: Icon(icon, color: Colors.grey),
-      title: Text(
-        title,
-        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-      ),
-      onTap: () {
-        Navigator.pop(context);
-        onTap();
-      },
-    );
+  Future<void> _callPhone(BuildContext context) async {
+    String number = "0929175653";
+    final Uri uri = Uri(scheme: 'tel', path: number);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    }
   }
+
+  Future<void> _openWebsite(BuildContext) async {
+    String url = "https://google.com";
+    final Uri uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
+// Drawer item
+  Widget _buildDrawerItem(BuildContext context, IconData icon, String title,
+          VoidCallback onTap) =>
+      ListTile(
+        leading: Icon(icon, color: const Color(0xFF21201E)),
+        title: Text(
+          title,
+          style: RideRequestPageStyles.subtitleStyle.copyWith(
+            fontSize: 16,
+            fontWeight: FontWeight.w500,
+            color: const Color(0xFF21201E),
+          ),
+        ),
+        onTap: onTap,
+      );
+
+// Group wrapper with background
+  Widget _buildGroup(List<Widget> children) => Container(
+        margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF5F4F2),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(children: children),
+      );
 
   Widget _rideBottomSheet(
     BuildContext context,

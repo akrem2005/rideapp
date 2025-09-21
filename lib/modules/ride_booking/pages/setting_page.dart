@@ -47,11 +47,9 @@ class _RiderSettingsPageState extends State<RiderSettingsPage> {
       String email = 'rider@example.com';
 
       if (currentUser != null) {
-        // Fetch from Parse backend if user is logged in
         name = currentUser.get<String>('username') ?? name;
         email = currentUser.get<String>('email') ?? email;
       } else {
-        // Fallback to SharedPreferences
         name = prefs.getString('rider_name') ?? name;
         email = prefs.getString('rider_email') ?? email;
       }
@@ -117,7 +115,7 @@ class _RiderSettingsPageState extends State<RiderSettingsPage> {
     if (currentUser != null) {
       await currentUser.logout();
     }
-    Navigator.pushReplacementNamed(context, '/login'); // Adjust route as needed
+    Navigator.pushReplacementNamed(context, '/login');
     _showSnackBar('Logged out successfully');
   }
 
@@ -146,99 +144,90 @@ class _RiderSettingsPageState extends State<RiderSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Theme(
-      data: Theme.of(context).copyWith(
-        primaryColor: const Color(0xFFFFA500),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFFFFA500),
-          primary: const Color(0xFFFFA500),
-          secondary: Colors.blue[100],
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Settings',
+          style: TextStyle(fontWeight: FontWeight.w600),
         ),
-        cardTheme: CardTheme(
-          elevation: 2,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        ),
+        centerTitle: true,
+        backgroundColor: const Color(0xFFFFA500),
+        foregroundColor: Colors.white,
       ),
-      child: Scaffold(
-        appBar: AppBar(
-          centerTitle: true,
-          title: const Text(
-            'Rider Settings',
-            style: TextStyle(fontWeight: FontWeight.w600),
-          ),
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () => Navigator.pop(context),
-          ),
-          elevation: 0,
-          backgroundColor: const Color(0xFFFFA500),
-          foregroundColor: Colors.white,
-        ),
-        body: _isLoading
-            ? const Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    CircularProgressIndicator(),
-                    SizedBox(height: 16),
-                    Text('Loading settings...'),
-                  ],
-                ),
-              )
-            : _hasError
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.error_outline,
-                          size: 48,
-                          color: Colors.red[700],
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          'Failed to load settings',
-                          style: TextStyle(fontSize: 16),
-                        ),
-                        const SizedBox(height: 16),
-                        ElevatedButton.icon(
-                          onPressed: _loadSettings,
-                          icon: const Icon(Icons.refresh),
-                          label: const Text('Retry'),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 24, vertical: 12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                : ListView(
-                    padding: const EdgeInsets.only(bottom: 16),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _hasError
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      // Notification Preferences
-                      AnimatedScale(
-                        scale: 1.0,
-                        duration: const Duration(milliseconds: 200),
-                        child: Card(
-                          child: SwitchListTile(
-                            contentPadding: const EdgeInsets.all(16),
-                            title: const Text(
-                              'Receive Notifications',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w600,
-                                fontSize: 16,
+                      Icon(Icons.error_outline,
+                          size: 48, color: Colors.red[700]),
+                      const SizedBox(height: 16),
+                      const Text('Failed to load settings'),
+                      const SizedBox(height: 16),
+                      ElevatedButton.icon(
+                        onPressed: _loadSettings,
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                )
+              : ListView(
+                  padding: const EdgeInsets.only(bottom: 80),
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Text(
+                        'Account',
+                        style: TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    Card(
+                      child: Column(
+                        children: [
+                          ListTile(
+                            leading: const Icon(Icons.person),
+                            title: TextField(
+                              controller: _nameController,
+                              decoration: const InputDecoration(
+                                labelText: 'Name',
+                                border: InputBorder.none,
                               ),
                             ),
-                            subtitle: Text(
-                              'Get updates on ride status and promotions',
-                              style: TextStyle(color: Colors.grey[600]),
+                          ),
+                          const Divider(height: 1),
+                          ListTile(
+                            leading: const Icon(Icons.email),
+                            title: TextField(
+                              controller: _emailController,
+                              decoration: const InputDecoration(
+                                labelText: 'Email',
+                                border: InputBorder.none,
+                              ),
                             ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Text(
+                        'Preferences',
+                        style: TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    Card(
+                      child: Column(
+                        children: [
+                          SwitchListTile(
+                            secondary: const Icon(Icons.notifications),
+                            title: const Text('Receive Notifications'),
+                            subtitle:
+                                const Text('Get updates on rides and offers'),
                             value: _receiveNotifications,
                             activeColor: const Color(0xFFFFA500),
                             onChanged: (value) {
@@ -247,82 +236,89 @@ class _RiderSettingsPageState extends State<RiderSettingsPage> {
                               });
                             },
                           ),
-                        ),
-                      ),
-                      // Preferred Car Type
-
-                      // Save Button
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 8),
-                        child: ElevatedButton(
-                          onPressed: _saveSettings,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFFFA500),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 24, vertical: 12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
+                          const Divider(height: 1),
+                          ListTile(
+                            leading: const Icon(Icons.directions_car),
+                            title: const Text('Preferred Car Type'),
+                            trailing: DropdownButton<String>(
+                              value: _preferredCarType,
+                              items: _carTypes.map((type) {
+                                return DropdownMenuItem<String>(
+                                  value: type,
+                                  child: Text(type),
+                                );
+                              }).toList(),
+                              onChanged: (value) {
+                                if (value != null) {
+                                  setState(() {
+                                    _preferredCarType = value;
+                                  });
+                                }
+                              },
                             ),
                           ),
-                          child: const Text(
-                            'Save Settings',
-                            style: TextStyle(fontSize: 16),
-                          ),
-                        ),
+                        ],
                       ),
-                      // Logout Button
-                      AnimatedScale(
-                        scale: 1.0,
-                        duration: const Duration(milliseconds: 200),
-                        child: Card(
-                          child: ListTile(
-                            contentPadding: const EdgeInsets.all(16),
-                            title: const Text(
-                              'Logout',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w600,
-                                fontSize: 16,
-                                color: Colors.red,
-                              ),
-                            ),
-                            trailing: const Icon(
-                              Icons.logout,
-                              color: Colors.red,
-                            ),
-                            onTap: () {
-                              showDialog(
-                                context: context,
-                                builder: (context) => AlertDialog(
-                                  title: const Text('Logout?'),
-                                  content: const Text(
-                                    'Are you sure you want to logout?',
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context),
-                                      child: const Text('Cancel'),
-                                    ),
-                                    TextButton(
-                                      onPressed: () {
-                                        _logout();
-                                        Navigator.pop(context);
-                                      },
-                                      child: const Text(
-                                        'Logout',
-                                        style: TextStyle(color: Colors.red),
-                                      ),
-                                    ),
-                                  ],
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Text(
+                        'App',
+                        style: TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.logout, color: Colors.red),
+                        title: const Text(
+                          'Logout',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w600, color: Colors.red),
+                        ),
+                        onTap: () {
+                          showDialog(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('Logout?'),
+                              content: const Text(
+                                  'Are you sure you want to logout?'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  child: const Text('Cancel'),
                                 ),
-                              );
-                            },
-                          ),
-                        ),
+                                TextButton(
+                                  onPressed: () {
+                                    _logout();
+                                    Navigator.pop(context);
+                                  },
+                                  child: const Text(
+                                    'Logout',
+                                    style: TextStyle(color: Colors.red),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
+                ),
+      bottomNavigationBar: Padding(
+        padding: const EdgeInsets.all(16),
+        child: ElevatedButton(
+          onPressed: _saveSettings,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFFFFA500),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+          child: const Text('Save Settings', style: TextStyle(fontSize: 16)),
+        ),
       ),
     );
   }

@@ -1,43 +1,39 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
 
 class RideHistoryEntry {
-  final String? id; // Ride ID
-  final String? riderId;
-  final String? rideDetails; // Combine pickup, destination, carType
-  final String? requestTime; // Maps to timestamp
+  final String? id;
+  final String? carType;
+  final String? plateNumber;
+  final String? pickup;
+  final String? destination;
+  final String? requestTime;
   final String? status;
+  final String? fare;
 
   RideHistoryEntry({
     this.id,
-    this.riderId,
-    this.rideDetails,
+    this.carType,
+    this.plateNumber,
+    this.pickup,
+    this.destination,
     this.requestTime,
     this.status,
+    this.fare,
   });
 
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'riderId': riderId,
-        'rideDetails': rideDetails,
-        'requestTime': requestTime,
-        'status': status,
-      };
-
   factory RideHistoryEntry.fromJson(Map<String, dynamic> json) {
-    // Construct ride details from pickup, destination, and carType
-    final pickup = json['pickup'] as String? ?? 'Unknown pickup';
-    final destination = json['destination'] as String? ?? 'Unknown destination';
-    final carType = json['carType'] as String? ?? 'Unknown car type';
-    final rideDetails = 'From: $pickup\nTo: $destination\nType: $carType';
-
     return RideHistoryEntry(
-      id: json['id'] as String? ?? 'Unknown',
-      riderId: json['riderId'] as String? ?? 'Unknown',
-      rideDetails: rideDetails,
-      requestTime: json['timestamp'] as String? ?? 'No time',
-      status: json['status'] as String? ?? 'Unknown',
+      id: json['id'] as String?,
+      carType: json['carType'] as String? ?? 'Taxi Economy',
+      plateNumber: json['plate'] as String?,
+      pickup: json['pickup'] as String?,
+      destination: json['destination'] as String?,
+      requestTime: json['timestamp'] as String?,
+      status: json['status'] as String?,
+      fare: json['fare']?.toString(),
     );
   }
 }
@@ -50,299 +46,194 @@ class OrderHistoryPage extends StatefulWidget {
 }
 
 class _OrderHistoryPageState extends State<OrderHistoryPage> {
-  List<RideHistoryEntry> _allRideRequests = [];
+  List<RideHistoryEntry> _rides = [];
   bool _isLoading = false;
-  bool _hasError = false;
 
   @override
   void initState() {
     super.initState();
-    _fetchRideRequests();
+    _fetchRides();
   }
 
-  Future<void> _fetchRideRequests() async {
-    try {
-      setState(() {
-        _isLoading = true;
-        _hasError = false;
-      });
-
-      final prefs = await SharedPreferences.getInstance();
-      final allKeys = prefs.getKeys();
-      List<RideHistoryEntry> allRides = [];
-
-      for (String key in allKeys) {
-        if (key.startsWith('ride_history_')) {
-          final historyJson = prefs.getString(key) ?? '[]';
-          try {
-            final List<dynamic> historyList = jsonDecode(historyJson);
-            allRides.addAll(
-              historyList.map((item) =>
-                  RideHistoryEntry.fromJson(item as Map<String, dynamic>)),
-            );
-          } catch (e) {
-            print('Error parsing history for key $key: $e');
-          }
-        }
-      }
-
-      // Sort rides by requestTime (timestamp) in descending order
-      allRides.sort((a, b) {
-        final aTime = a.requestTime != null
-            ? DateTime.tryParse(a.requestTime!) ?? DateTime(0)
-            : DateTime(0);
-        final bTime = b.requestTime != null
-            ? DateTime.tryParse(b.requestTime!) ?? DateTime(0)
-            : DateTime(0);
-        return bTime.compareTo(aTime); // Latest first
-      });
-
-      if (!mounted) return;
-
-      setState(() {
-        _allRideRequests = allRides;
-        _isLoading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-        _hasError = true;
-      });
-      _showSnackBar('An error occurred: $e', isError: true);
-    }
-  }
-
-  Future<void> _clearAllRideHistory() async {
+  Future<void> _fetchRides() async {
+    setState(() => _isLoading = true);
     final prefs = await SharedPreferences.getInstance();
     final allKeys = prefs.getKeys();
+    List<RideHistoryEntry> rides = [];
 
     for (String key in allKeys) {
       if (key.startsWith('ride_history_')) {
-        await prefs.remove(key);
+        final historyJson = prefs.getString(key) ?? '[]';
+        final List<dynamic> historyList = jsonDecode(historyJson);
+        rides.addAll(historyList
+            .map((item) => RideHistoryEntry.fromJson(item))
+            .toList());
       }
     }
 
-    setState(() {
-      _allRideRequests = [];
+    rides.sort((a, b) {
+      final aTime =
+          a.requestTime != null ? DateTime.tryParse(a.requestTime!) : null;
+      final bTime =
+          b.requestTime != null ? DateTime.tryParse(b.requestTime!) : null;
+      return (bTime ?? DateTime(0)).compareTo(aTime ?? DateTime(0));
     });
 
-    _showSnackBar('All ride history cleared');
+    setState(() {
+      _rides = rides;
+      _isLoading = false;
+    });
   }
 
-  void _showSnackBar(String message, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          message,
-          style: const TextStyle(color: Colors.white),
-        ),
-        backgroundColor: isError ? Colors.red[700] : Colors.green[700],
-        duration: const Duration(seconds: 3),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        margin: const EdgeInsets.all(16),
-        action: SnackBarAction(
-          label: 'Dismiss',
-          textColor: Colors.white,
-          onPressed: () {
-            ScaffoldMessenger.of(context).hideCurrentSnackBar();
-          },
-        ),
-      ),
-    );
+  String _getCarIcon(String? carType) {
+    final type = (carType ?? '').toLowerCase();
+    if (type.contains('economy')) return 'lib/shared/assets/economy.png';
+    if (type.contains('basic')) return 'lib/shared/assets/basic.png';
+    if (type.contains('executive')) return 'lib/shared/assets/executive.png';
+    if (type.contains('minivan')) return 'lib/shared/assets/minivan.png';
+    return 'lib/shared/assets/economy.png'; // fallback
   }
 
   @override
   Widget build(BuildContext context) {
-    return Theme(
-      data: Theme.of(context).copyWith(
-        primaryColor: const Color(0xFFFFA500),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFFFFA500),
-          primary: const Color(0xFFFFA500),
-          secondary: Colors.blue[100],
-        ),
-        cardTheme: CardTheme(
-          elevation: 2,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+    const mainTextColor = Color(0xFF2d2c2a);
+    const subTextColor = Color(0xFF858482);
+
+    Map<String, List<RideHistoryEntry>> grouped = {};
+    for (var ride in _rides) {
+      final date = ride.requestTime != null
+          ? DateFormat('EEEE, MMM d')
+              .format(DateTime.tryParse(ride.requestTime!) ?? DateTime.now())
+          : 'Unknown Date';
+      grouped.putIfAbsent(date, () => []).add(ride);
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(56),
+        child: Container(
+          color: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: SafeArea(
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                const SizedBox(height: 100),
+                const Text(
+                  "My Rides and Orders",
+                  style: TextStyle(
+                    color: Color(0xFF393939),
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.black),
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
-      child: Scaffold(
-        appBar: AppBar(
-          centerTitle: true,
-          title: const Text(
-            'All Ride Requests',
-            style: TextStyle(fontWeight: FontWeight.w600),
-          ),
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () => Navigator.pop(context),
-          ),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              tooltip: 'Refresh',
-              onPressed: _isLoading ? null : _fetchRideRequests,
-            ),
-            IconButton(
-              icon: const Icon(Icons.delete_forever),
-              tooltip: 'Clear All History',
-              onPressed: _allRideRequests.isEmpty
-                  ? null
-                  : () {
-                      showDialog(
-                        context: context,
-                        builder: (context) => AlertDialog(
-                          title: const Text('Clear All Ride History?'),
-                          content: const Text(
-                            'This will permanently delete all ride history. Are you sure?',
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(context),
-                              child: const Text('Cancel'),
-                            ),
-                            TextButton(
-                              onPressed: () {
-                                _clearAllRideHistory();
-                                Navigator.pop(context);
-                              },
-                              child: const Text(
-                                'Clear',
-                                style: TextStyle(color: Colors.red),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-            ),
-          ],
-          elevation: 0,
-          backgroundColor: const Color(0xFFFFA500),
-          foregroundColor: Colors.white,
-        ),
-        body: _isLoading
+      body: SafeArea(
+        child: _isLoading
             ? const Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    CircularProgressIndicator(),
-                    SizedBox(height: 16),
-                    Text('Loading ride history...'),
-                  ],
-                ),
-              )
-            : _hasError
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.error_outline,
-                          size: 48,
-                          color: Colors.red[700],
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          'Failed to load ride history',
-                          style: TextStyle(fontSize: 16),
-                        ),
-                        const SizedBox(height: 16),
-                        ElevatedButton.icon(
-                          onPressed: _fetchRideRequests,
-                          icon: const Icon(Icons.refresh),
-                          label: const Text('Retry'),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 24, vertical: 12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                : _allRideRequests.isEmpty
-                    ? const Center(
+                child: CircularProgressIndicator(color: mainTextColor))
+            : ListView(
+                padding: const EdgeInsets.all(16),
+                children: grouped.entries.map((entry) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
                         child: Text(
-                          'No ride requests found',
-                          style: TextStyle(fontSize: 16, color: Colors.grey),
-                        ),
-                      )
-                    : RefreshIndicator(
-                        onRefresh: _fetchRideRequests,
-                        child: ListView.builder(
-                          padding: const EdgeInsets.only(bottom: 16),
-                          itemCount: _allRideRequests.length,
-                          itemBuilder: (context, index) {
-                            final request = _allRideRequests[index];
-                            return AnimatedScale(
-                              scale: 1.0,
-                              duration: const Duration(milliseconds: 200),
-                              child: Card(
-                                child: ListTile(
-                                  contentPadding: const EdgeInsets.all(16),
-                                  title: Text(
-                                    'Ride ID: ${request.id ?? 'Unknown'}',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                  subtitle: Padding(
-                                    padding: const EdgeInsets.only(top: 8),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          request.rideDetails ?? 'No details',
-                                          style: TextStyle(
-                                            color: Colors.grey[600],
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          'Time: ${request.requestTime ?? 'No time'}',
-                                          style: TextStyle(
-                                            color: Colors.grey[600],
-                                          ),
-                                        ),
-                                        Text(
-                                          'Status: ${request.status ?? 'Unknown'}',
-                                          style: TextStyle(
-                                            color: Colors.grey[600],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  trailing: IconButton(
-                                    icon: const Icon(Icons.info_outline),
-                                    color: const Color(0xFFFFA500),
-                                    tooltip: 'View Details',
-                                    onPressed: () {
-                                      // Placeholder for detailed view navigation
-                                      _showSnackBar(
-                                          'Details for Ride ID: ${request.id}');
-                                    },
-                                  ),
-                                  onTap: () {
-                                    // Tap card to view details
-                                    _showSnackBar(
-                                        'Details for Ride ID: ${request.id}');
-                                  },
-                                ),
-                              ),
-                            );
-                          },
+                          entry.key,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                            color: subTextColor,
+                          ),
                         ),
                       ),
+                      ...entry.value.map((ride) {
+                        return Container(
+                          margin: const EdgeInsets.symmetric(vertical: 6),
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF5F4F2),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Image.asset(
+                                    _getCarIcon(ride.carType),
+                                    width: 40,
+                                    height: 40,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '${ride.carType ?? 'Taxi'}${ride.requestTime != null ? ', ${DateFormat.Hm().format(DateTime.tryParse(ride.requestTime!) ?? DateTime.now())}' : ''}',
+                                        style: const TextStyle(
+                                          color: mainTextColor,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(height: 2),
+                                      // ...existing code...
+                                      Text(
+                                        ride.destination != null
+                                            ? (ride.destination!.length > 28
+                                                ? '${ride.destination!.substring(0, 28)}...'
+                                                : ride.destination!)
+                                            : 'Unknown Destination',
+                                        style: const TextStyle(
+                                          color: subTextColor,
+                                          fontSize: 14,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+// ...existing code...
+                                    ],
+                                  ),
+                                ],
+                              ),
+                              Text(
+                                '${ride.fare ?? '--'} ETB',
+                                style: const TextStyle(
+                                  color: mainTextColor,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    ],
+                  );
+                }).toList(),
+              ),
       ),
     );
   }
