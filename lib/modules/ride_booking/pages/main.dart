@@ -17,6 +17,7 @@ import 'discount_page.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'order_history_page.dart';
 import 'setting_page.dart';
+import 'package:parse_server_sdk_flutter/parse_server_sdk_flutter.dart';
 
 // import 'package:app_settings/app_settings.dart';
 
@@ -125,8 +126,9 @@ final rideStatusProvider =
     StateProvider.autoDispose<RideStatus>((ref) => RideStatus.none);
 final currentRideRequestIdProvider =
     StateProvider.autoDispose<String?>((ref) => null);
+
 final driverDetailsProvider =
-    StateProvider.autoDispose<Map<String, dynamic>?>((ref) => null);
+    StateProvider<Map<String, dynamic>?>((ref) => null);
 
 // Services
 class RideRequestService {
@@ -149,25 +151,45 @@ class RideRequestService {
     }
   }
 
-  Future<void> updateDriverRating(String driverObjectId, int rating) async {
-    final url = '$back4appBaseUrl/classes/Driver/$driverObjectId';
+  Future<void> updateDriverRating(String driverObjectId, int newRating) async {
+    print(
+        'updateDriverRating called with driverObjectId: $driverObjectId, newRating: $newRating');
+
     try {
-      final response = await http.put(
-        Uri.parse(url),
-        headers: {
-          'X-Parse-Application-Id': appId,
-          'X-Parse-REST-API-Key': restApiKey,
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({'rating': rating}),
-      );
-      if (response.statusCode == 200) {
-        print('Driver rating updated successfully');
+      // Fetch the current driver details to get the existing rating
+      final driverDetails = await fetchDriverDetails(driverObjectId);
+      if (driverDetails == null) {
+        print('Failed to fetch driver details for rating update');
+        throw Exception('Unable to fetch driver details');
+      }
+
+      // Get the existing rating (default to 0.0 if null)
+      final existingRating = driverDetails['rating'] as double? ?? 0.0;
+      print('Existing driver rating: $existingRating');
+
+      // Calculate the new average rating
+      final updatedRating = (existingRating + newRating) / 2.0;
+      print('Calculated new average rating: $updatedRating');
+
+      // Update the driver’s rating in the backend
+      final driver = ParseObject('Driver')..objectId = driverObjectId;
+      driver.set('rating', updatedRating);
+      final response = await driver.save();
+      if (response.success) {
+        print('Driver rating updated successfully to: $updatedRating');
+        // Update the driverDetailsProvider with the new rating
+        ref.read(driverDetailsProvider.notifier).state = {
+          ...driverDetails,
+          'rating': updatedRating,
+        };
       } else {
-        print('Failed to update driver rating: ${response.body}');
+        print('Failed to update driver rating: ${response.error?.message}');
+        throw Exception(
+            'Failed to update driver rating: ${response.error?.message}');
       }
     } catch (e) {
       print('Error updating driver rating: $e');
+      throw Exception('Error updating driver rating: $e');
     }
   }
 
@@ -184,17 +206,21 @@ class RideRequestService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         print('Driver Details Response: $data'); // Debug log
-        return {
+        final driverDetails = {
           'driverId': driverId,
           'name': data['name'] ?? data['username'] ?? 'Unknown Driver',
-          'rating': data['rating']?.toDouble() ?? 4.8,
+          'rating': double.tryParse(data['rating']?.toString() ?? '0.0') ?? 0.0,
         };
+        print('Updating driverDetailsProvider with: $driverDetails');
+        ref.read(driverDetailsProvider.notifier).state = driverDetails;
+        return driverDetails;
       } else {
         print('Failed to fetch driver details: ${response.body}');
         throw Exception('Failed to fetch driver details: ${response.body}');
       }
     } catch (e) {
       print('Error fetching driver details: $e');
+      ref.read(driverDetailsProvider.notifier).state = null;
       return null;
     }
   }
@@ -327,8 +353,7 @@ class RideRequestService {
           final driverPointer = result['assignedDriverId'];
           final newStatus = {
                 'pending': RideStatus.pending,
-                'assigned': RideStatus
-                    .pending, // Map "assigned" to pending for UI continuity
+                'assigned': RideStatus.pending,
                 'accepted': RideStatus.accepted,
                 'start': RideStatus.start,
                 'onroute': RideStatus.onroute,
@@ -348,16 +373,15 @@ class RideRequestService {
             }
             final driverDetails =
                 await fetchDriverDetails(driverPointer['objectId']);
+            print('Updating driverDetailsProvider with: $driverDetails');
             ref.read(driverDetailsProvider.notifier).state = driverDetails;
-          } else {
+          } else if (newStatus == RideStatus.none) {
             ref.read(driverDetailsProvider.notifier).state = null;
           }
 
-          if (newStatus == RideStatus.none ||
-              newStatus == RideStatus.finished) {
+          if (newStatus == RideStatus.none) {
             ref.read(currentRideRequestIdProvider.notifier).state = null;
-            ref.read(driverDetailsProvider.notifier).state = null;
-            if (context.mounted && newStatus == RideStatus.none) {
+            if (context.mounted) {
               ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                   content: Text(status == 'rejected'
                       ? 'Ride rejected by driver'
@@ -589,8 +613,8 @@ class RideRequestPage extends HookConsumerWidget {
             gradient: backgroundColor == null
                 ? const LinearGradient(
                     colors: [
-                      Color(0xFFFFA500), // Warm Orange
-                      Color.fromARGB(255, 255, 136, 0), // Orange-Red
+                      Color(0xFF34A853), // Warm Green
+                      Color(0xFF34A853), // Orange-Red
                     ],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
@@ -642,38 +666,49 @@ class RideRequestPage extends HookConsumerWidget {
               Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(
-                  children: [
-                    const SizedBox(height: 20),
-                    const CircleAvatar(
-                      radius: 28,
-                      backgroundImage: AssetImage('lib/shared/assets/user.png'),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            "Akrem",
-                            style: RideRequestPageStyles.titleStyle.copyWith(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w600,
-                              color: const Color(0xFF21201E),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            "+251 929175653",
-                            style: RideRequestPageStyles.subtitleStyle.copyWith(
-                              color: const Color(0xFF21201E).withOpacity(0.6),
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
+                child: GestureDetector(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (context) => const RiderSettingsPage()),
+                    );
+                  },
+                  child: Row(
+                    children: [
+                      const SizedBox(height: 20),
+                      const CircleAvatar(
+                        radius: 28,
+                        backgroundImage:
+                            AssetImage('lib/shared/assets/user.png'),
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              "Akrem",
+                              style: RideRequestPageStyles.titleStyle.copyWith(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                                color: const Color(0xFF21201E),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              "+251 929175653",
+                              style:
+                                  RideRequestPageStyles.subtitleStyle.copyWith(
+                                color: const Color(0xFF21201E).withOpacity(0.6),
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
 
@@ -773,7 +808,7 @@ class RideRequestPage extends HookConsumerWidget {
 
   Future<void> _logout(BuildContext context) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('userObjectId');
+    await prefs.remove('driverObjectId');
     if (context.mounted) {
       Navigator.pushReplacement(context,
           MaterialPageRoute(builder: (context) => const GetStartedPage()));
@@ -902,100 +937,146 @@ class RideRequestPage extends HookConsumerWidget {
           ),
         ],
       );
-  // ...existing code...
-
-  void _showRatingDialog(BuildContext context) {
+  void _showRatingDialog(BuildContext context, String? driverObjectId) {
     showDialog(
       context: context,
       builder: (context) {
         final rating = ValueNotifier<int?>(null);
-        return AlertDialog(
-          backgroundColor: const Color(0xFFF5F4F2), // SideNavBar color
-          shape: RoundedRectangleBorder(
-            borderRadius:
-                BorderRadius.circular(RideRequestPageStyles.borderRadius),
-          ),
-          title: Row(
-            children: [
-              Image.asset(
-                'lib/shared/assets/rate.png',
-                width: 40,
-                height: 40,
+        return Consumer(
+          builder: (context, ref, _) {
+            final driverDetails = ref.watch(driverDetailsProvider);
+            final effectiveDriverId =
+                driverObjectId ?? driverDetails?['driverId'] as String?;
+            print(
+                'Rating Dialog - Driver Details: $driverDetails, Effective Driver ID: $effectiveDriverId');
+            return AlertDialog(
+              backgroundColor: const Color(0xFFF5F4F2),
+              shape: RoundedRectangleBorder(
+                borderRadius:
+                    BorderRadius.circular(RideRequestPageStyles.borderRadius),
               ),
-              const SizedBox(width: 12),
-              Text(
-                "Rate Your Ride",
-                style: RideRequestPageStyles.titleStyle.copyWith(
-                  color: const Color(0xFF21201E),
-                  fontSize: 20,
-                ),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 8),
-              Text(
-                "How was your experience?",
-                style: RideRequestPageStyles.subtitleStyle.copyWith(
-                  color: const Color(0xFF21201E).withOpacity(0.7),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(
-                  5,
-                  (index) => ValueListenableBuilder<int?>(
-                    valueListenable: rating,
-                    builder: (context, value, child) => IconButton(
-                      icon: Icon(
-                        index < (value ?? 0)
-                            ? CupertinoIcons.star_fill
-                            : CupertinoIcons.star,
-                        color: index < (value ?? 0)
-                            ? const Color(0xFF21201E)
-                            : Colors.grey,
-                        size: 32,
-                      ),
-                      onPressed: () => rating.value = index + 1,
+              title: Row(
+                children: [
+                  Image.asset(
+                    'lib/shared/assets/rate.png',
+                    width: 40,
+                    height: 40,
+                    errorBuilder: (context, error, stackTrace) =>
+                        const Icon(CupertinoIcons.star, size: 40),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    "Rate Your Ride",
+                    style: RideRequestPageStyles.titleStyle.copyWith(
+                      color: const Color(0xFF21201E),
+                      fontSize: 20,
                     ),
                   ),
-                ),
+                ],
               ),
-              ValueListenableBuilder<int?>(
-                valueListenable: rating,
-                builder: (context, value, child) => value != null
-                    ? Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Text(
-                          "Rated $value star${value == 1 ? '' : 's'}!",
-                          style: RideRequestPageStyles.subtitleStyle.copyWith(
-                            color: const Color(0xFF21201E),
-                            fontWeight: FontWeight.bold,
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 8),
+                  Text(
+                    "How was your experience?",
+                    style: RideRequestPageStyles.subtitleStyle.copyWith(
+                      color: const Color(0xFF21201E).withOpacity(0.7),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(
+                      5,
+                      (index) => ValueListenableBuilder<int?>(
+                        valueListenable: rating,
+                        builder: (context, value, child) => IconButton(
+                          icon: Icon(
+                            index < (value ?? 0)
+                                ? CupertinoIcons.star_fill
+                                : CupertinoIcons.star,
+                            color: index < (value ?? 0)
+                                ? const Color(0xFF21201E)
+                                : Colors.grey,
+                            size: 32,
                           ),
+                          onPressed: () => rating.value = index + 1,
                         ),
-                      )
-                    : const SizedBox.shrink(),
+                      ),
+                    ),
+                  ),
+                  ValueListenableBuilder<int?>(
+                    valueListenable: rating,
+                    builder: (context, value, child) => value != null
+                        ? Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text(
+                              "Rated $value star${value == 1 ? '' : 's'}!",
+                              style:
+                                  RideRequestPageStyles.subtitleStyle.copyWith(
+                                color: const Color(0xFF21201E),
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                ],
               ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.white,
-                backgroundColor: const Color(0xFF21201E),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+              actions: [
+                TextButton(
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    backgroundColor: const Color(0xFF21201E),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  onPressed: () async {
+                    print('Rating dialog Done button pressed');
+                    final selectedRating = rating.value ?? 0;
+                    print('Selected rating: $selectedRating');
+                    print('Driver objectId: $effectiveDriverId');
+                    if (selectedRating > 0 && effectiveDriverId != null) {
+                      print(
+                          'Submitting rating $selectedRating for driver $effectiveDriverId');
+                      await ref
+                          .read(rideRequestServiceProvider)
+                          .updateDriverRating(
+                              effectiveDriverId, selectedRating);
+                      ref.read(driverDetailsProvider.notifier).state = null;
+                      ref.read(currentRideRequestIdProvider.notifier).state =
+                          null;
+                      if (context.mounted) {
+                        Navigator.pop(context); // Close dialog
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Rating submitted!')),
+                        );
+                      }
+                    } else {
+                      print(
+                          'Rating not submitted: selectedRating=$selectedRating, driverObjectId=$effectiveDriverId');
+                      if (context.mounted) {
+                        Navigator.pop(context); // Close dialog
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Unable to submit rating: No driver selected or invalid rating',
+                              style: RideRequestPageStyles.errorStyle,
+                            ),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                  child: const Text("Done"),
                 ),
-              ),
-              onPressed: () => Navigator.pop(context),
-              child: const Text("Done"),
-            ),
-          ],
+              ],
+            );
+          },
         );
       },
     );
@@ -1221,7 +1302,7 @@ class RideRequestPage extends HookConsumerWidget {
                   leading: const CircleAvatar(
                       radius: 30,
                       backgroundImage:
-                          AssetImage('lib/shared/assets/driver_avatar.png')),
+                          AssetImage('lib/shared/assets/driver.png')),
                   title: Text(driverDetails['name'] ?? 'Unknown Driver',
                       style: RideRequestPageStyles.titleStyle
                           .copyWith(fontSize: 18)),
@@ -1307,6 +1388,8 @@ class RideRequestPage extends HookConsumerWidget {
       HookConsumer(
         builder: (context, ref, child) {
           final requestId = ref.read(currentRideRequestIdProvider);
+          final driverDetails = ref.read(driverDetailsProvider);
+          final driverObjectId = driverDetails?['driverId'] as String?;
 
           Future<void> saveHistory() async {
             final prefs = await SharedPreferences.getInstance();
@@ -1337,12 +1420,13 @@ class RideRequestPage extends HookConsumerWidget {
                       style: RideRequestPageStyles.titleStyle
                           .copyWith(fontSize: 18)),
                   onTap: () async {
-                    Navigator.pop(context);
-                    await saveHistory(); // Save history after payment
+                    await saveHistory(); // Save history first
+                    Navigator.pop(context); // Close payment sheet
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                           content: Text("Payment successful via Cash")));
-                      _showRatingDialog(context);
+                      _showRatingDialog(
+                          context, driverObjectId); // Pass driverObjectId
                     }
                   },
                 ),
@@ -1353,12 +1437,13 @@ class RideRequestPage extends HookConsumerWidget {
                       style: RideRequestPageStyles.titleStyle
                           .copyWith(fontSize: 18)),
                   onTap: () async {
-                    Navigator.pop(context);
-                    await saveHistory(); // Save history after payment
+                    await saveHistory(); // Save history first
+                    Navigator.pop(context); // Close payment sheet
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                           content: Text("Card payment coming soon")));
-                      _showRatingDialog(context);
+                      _showRatingDialog(
+                          context, driverObjectId); // Pass driverObjectId
                     }
                   },
                 ),

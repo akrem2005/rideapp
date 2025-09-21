@@ -1,323 +1,191 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:parse_server_sdk_flutter/parse_server_sdk_flutter.dart';
+import 'package:intl_phone_field/intl_phone_field.dart';
 
-class RiderSettingsPage extends StatefulWidget {
+class RiderSettingsPage extends StatelessWidget {
   const RiderSettingsPage({super.key});
 
   @override
-  State<RiderSettingsPage> createState() => _RiderSettingsPageState();
-}
+  Widget build(BuildContext context) {
+    final ValueNotifier<String> phoneNumber = ValueNotifier("+251929175653");
 
-class _RiderSettingsPageState extends State<RiderSettingsPage> {
-  bool _isLoading = false;
-  bool _hasError = false;
-  String _riderName = 'Loading...';
-  String _riderEmail = 'Loading...';
-  bool _receiveNotifications = true;
-  String _preferredCarType = 'Economy';
-  final List<String> _carTypes = ['Economy', 'Premium', 'Luxury'];
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _emailController = TextEditingController();
-
-  @override
-  void initState() {
-    super.initState();
-    _loadSettings();
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _emailController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadSettings() async {
-    try {
-      setState(() {
-        _isLoading = true;
-        _hasError = false;
-      });
-
-      final prefs = await SharedPreferences.getInstance();
-      final ParseUser? currentUser = await ParseUser.currentUser();
-
-      String name = 'Rider Name';
-      String email = 'rider@example.com';
-
-      if (currentUser != null) {
-        name = currentUser.get<String>('username') ?? name;
-        email = currentUser.get<String>('email') ?? email;
-      } else {
-        name = prefs.getString('rider_name') ?? name;
-        email = prefs.getString('rider_email') ?? email;
-      }
-
-      setState(() {
-        _riderName = name;
-        _riderEmail = email;
-        _nameController.text = name;
-        _emailController.text = email;
-        _receiveNotifications = prefs.getBool('receive_notifications') ?? true;
-        _preferredCarType = prefs.getString('preferred_car_type') ?? 'Economy';
-        _isLoading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-        _hasError = true;
-      });
-      _showSnackBar('Failed to load settings: $e', isError: true);
-    }
-  }
-
-  Future<void> _saveSettings() async {
-    try {
-      setState(() {
-        _isLoading = true;
-      });
-
-      final prefs = await SharedPreferences.getInstance();
-      final ParseUser? currentUser = await ParseUser.currentUser();
-
-      await prefs.setString('rider_name', _nameController.text);
-      await prefs.setString('rider_email', _emailController.text);
-      await prefs.setBool('receive_notifications', _receiveNotifications);
-      await prefs.setString('preferred_car_type', _preferredCarType);
-
-      if (currentUser != null) {
-        currentUser
-          ..set('username', _nameController.text)
-          ..set('email', _emailController.text);
-        await currentUser.save();
-      }
-
-      setState(() {
-        _riderName = _nameController.text;
-        _riderEmail = _emailController.text;
-        _isLoading = false;
-      });
-
-      _showSnackBar('Settings saved successfully');
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-      });
-      _showSnackBar('Failed to save settings: $e', isError: true);
-    }
-  }
-
-  Future<void> _logout() async {
-    final ParseUser? currentUser = await ParseUser.currentUser();
-    if (currentUser != null) {
-      await currentUser.logout();
-    }
-    Navigator.pushReplacementNamed(context, '/login');
-    _showSnackBar('Logged out successfully');
-  }
-
-  void _showSnackBar(String message, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          message,
-          style: const TextStyle(color: Colors.white),
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        centerTitle: true,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Color(0xFF21201E)),
+          onPressed: () => Navigator.pop(context),
         ),
-        backgroundColor: isError ? Colors.red[700] : Colors.green[700],
-        duration: const Duration(seconds: 3),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        margin: const EdgeInsets.all(16),
-        action: SnackBarAction(
-          label: 'Dismiss',
-          textColor: Colors.white,
-          onPressed: () {
-            ScaffoldMessenger.of(context).hideCurrentSnackBar();
-          },
+        title: const Text(
+          'Edit Profile',
+          style: TextStyle(
+            fontWeight: FontWeight.w600,
+            fontSize: 18,
+            color: Color(0xFF21201E),
+          ),
         ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              // handle save
+              debugPrint("Saved phone: ${phoneNumber.value}");
+            },
+            child: const Text(
+              "Save",
+              style: TextStyle(
+                color: Color(0xFF34A853), // green accent
+                fontWeight: FontWeight.w600,
+                fontSize: 16,
+              ),
+            ),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                children: [
+                  const SizedBox(height: 20),
+
+                  // Profile picture with edit button
+                  Stack(
+                    children: [
+                      const CircleAvatar(
+                        radius: 48,
+                        backgroundColor: Color(0xFFF5F4F2),
+                        child: Icon(Icons.person,
+                            size: 48, color: Color(0xFF9E9E9E)),
+                      ),
+                      Positioned(
+                        bottom: 0,
+                        right: 0,
+                        child: CircleAvatar(
+                          radius: 16,
+                          backgroundColor: Colors.white,
+                          child: Container(
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Color(0xFF34A853),
+                            ),
+                            padding: const EdgeInsets.all(4),
+                            child: const Icon(Icons.camera_alt,
+                                size: 16, color: Colors.white),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 30),
+
+                  // First name
+                  _buildTextField("First name"),
+
+                  const SizedBox(height: 16),
+
+                  // Last name
+                  _buildTextField("Last name"),
+
+
+                  const SizedBox(height: 16),
+
+                  // Phone field (locked)
+                  AbsorbPointer(
+                    absorbing: true, // disables input
+                    child: IntlPhoneField(
+                      decoration: InputDecoration(
+                        labelText: 'Phone Number',
+                        labelStyle: const TextStyle(
+                          color: Color(0xFF21201E),
+                          fontSize: 16,
+                        ),
+                        filled: true,
+                        fillColor: Color(0xFFF5F4F2),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 14),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                      initialCountryCode: 'ET',
+                      initialValue: '929175653',
+                      onChanged: (phone) {
+                        phoneNumber.value = phone.completeNumber;
+                      },
+                    ),
+                  ),
+
+                  const SizedBox(height: 30),
+
+                  // Delete account button
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        // handle delete
+                        debugPrint("Delete my account pressed");
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text(
+                        "Delete my account",
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Footer text
+          Padding(
+            padding: const EdgeInsets.only(bottom: 20),
+            child: Text(
+              "© All rights reserved",
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.grey[600],
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text(
-          'Settings',
-          style: TextStyle(fontWeight: FontWeight.w600),
+  Widget _buildTextField(String hint) {
+    return TextField(
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: const TextStyle(
+          color: Color(0xFF21201E),
+          fontSize: 16,
         ),
-        centerTitle: true,
-        backgroundColor: const Color(0xFFFFA500),
-        foregroundColor: Colors.white,
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _hasError
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.error_outline,
-                          size: 48, color: Colors.red[700]),
-                      const SizedBox(height: 16),
-                      const Text('Failed to load settings'),
-                      const SizedBox(height: 16),
-                      ElevatedButton.icon(
-                        onPressed: _loadSettings,
-                        icon: const Icon(Icons.refresh),
-                        label: const Text('Retry'),
-                      ),
-                    ],
-                  ),
-                )
-              : ListView(
-                  padding: const EdgeInsets.only(bottom: 80),
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text(
-                        'Account',
-                        style: TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    Card(
-                      child: Column(
-                        children: [
-                          ListTile(
-                            leading: const Icon(Icons.person),
-                            title: TextField(
-                              controller: _nameController,
-                              decoration: const InputDecoration(
-                                labelText: 'Name',
-                                border: InputBorder.none,
-                              ),
-                            ),
-                          ),
-                          const Divider(height: 1),
-                          ListTile(
-                            leading: const Icon(Icons.email),
-                            title: TextField(
-                              controller: _emailController,
-                              decoration: const InputDecoration(
-                                labelText: 'Email',
-                                border: InputBorder.none,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text(
-                        'Preferences',
-                        style: TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    Card(
-                      child: Column(
-                        children: [
-                          SwitchListTile(
-                            secondary: const Icon(Icons.notifications),
-                            title: const Text('Receive Notifications'),
-                            subtitle:
-                                const Text('Get updates on rides and offers'),
-                            value: _receiveNotifications,
-                            activeColor: const Color(0xFFFFA500),
-                            onChanged: (value) {
-                              setState(() {
-                                _receiveNotifications = value;
-                              });
-                            },
-                          ),
-                          const Divider(height: 1),
-                          ListTile(
-                            leading: const Icon(Icons.directions_car),
-                            title: const Text('Preferred Car Type'),
-                            trailing: DropdownButton<String>(
-                              value: _preferredCarType,
-                              items: _carTypes.map((type) {
-                                return DropdownMenuItem<String>(
-                                  value: type,
-                                  child: Text(type),
-                                );
-                              }).toList(),
-                              onChanged: (value) {
-                                if (value != null) {
-                                  setState(() {
-                                    _preferredCarType = value;
-                                  });
-                                }
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text(
-                        'App',
-                        style: TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    Card(
-                      child: ListTile(
-                        leading: const Icon(Icons.logout, color: Colors.red),
-                        title: const Text(
-                          'Logout',
-                          style: TextStyle(
-                              fontWeight: FontWeight.w600, color: Colors.red),
-                        ),
-                        onTap: () {
-                          showDialog(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              title: const Text('Logout?'),
-                              content: const Text(
-                                  'Are you sure you want to logout?'),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context),
-                                  child: const Text('Cancel'),
-                                ),
-                                TextButton(
-                                  onPressed: () {
-                                    _logout();
-                                    Navigator.pop(context);
-                                  },
-                                  child: const Text(
-                                    'Logout',
-                                    style: TextStyle(color: Colors.red),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.all(16),
-        child: ElevatedButton(
-          onPressed: _saveSettings,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFFFFA500),
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-          child: const Text('Save Settings', style: TextStyle(fontSize: 16)),
+        filled: true,
+        fillColor: Color(0xFFF5F4F2),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
         ),
       ),
     );

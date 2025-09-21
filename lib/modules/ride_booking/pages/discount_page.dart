@@ -133,7 +133,7 @@ class _DiscountPageState extends State<DiscountPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Code "$code" copied to clipboard!'),
-        backgroundColor: const Color(0xFFF5E10E),
+        backgroundColor: const Color(0xFF34A853),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -253,6 +253,14 @@ class _DiscountPageState extends State<DiscountPage> {
                                         horizontal: 16, vertical: 8),
                                     child: ListTile(
                                       contentPadding: const EdgeInsets.all(16),
+
+                                      // Add gift.png in front of each item
+                                      leading: Image.asset(
+                                        'lib/shared/assets/gift.png', // make sure this path matches your assets folder
+                                        width: 32,
+                                        height: 32,
+                                      ),
+
                                       title: Text(
                                         discount.title,
                                         style: const TextStyle(

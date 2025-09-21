@@ -39,7 +39,7 @@ class PhoneInputPage extends HookConsumerWidget {
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
-                    color: Color(0xFFFFA500), // Orange
+                    color: Color(0xFF34A853), // Orange
                   ),
                 ),
               ),
@@ -75,7 +75,7 @@ class PhoneInputPage extends HookConsumerWidget {
                     );
                   },
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFFA500), // Orange
+                    backgroundColor: Color(0xFF34A853), // Green
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
