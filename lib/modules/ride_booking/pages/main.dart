@@ -650,136 +650,139 @@ class RideRequestPage extends HookConsumerWidget {
           ),
         ),
         child: SafeArea(
-          child: Column(
-            children: [
-              const SizedBox(height: 20),
-              // Back arrow row
-              Align(
-                alignment: Alignment.centerLeft,
-                child: IconButton(
-                  icon: const Icon(Icons.arrow_back, color: Color(0xFF21201E)),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ),
+          child: FutureBuilder<SharedPreferences>(
+            future: SharedPreferences.getInstance(),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              final prefs = snapshot.data!;
+              final userName = prefs.getString('userName') ?? 'User';
+              final userPhoneNumber =
+                  prefs.getString('userPhoneNumber') ?? 'No phone number';
 
-              // Profile info row
-              Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: GestureDetector(
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => const RiderSettingsPage()),
-                    );
-                  },
-                  child: Row(
-                    children: [
-                      const SizedBox(height: 20),
-                      const CircleAvatar(
-                        radius: 28,
-                        backgroundImage:
-                            AssetImage('lib/shared/assets/user.png'),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              "Akrem",
-                              style: RideRequestPageStyles.titleStyle.copyWith(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w600,
-                                color: const Color(0xFF21201E),
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              "+251 929175653",
-                              style:
-                                  RideRequestPageStyles.subtitleStyle.copyWith(
-                                color: const Color(0xFF21201E).withOpacity(0.6),
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+              return Column(
+                children: [
+                  const SizedBox(height: 20),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: IconButton(
+                      icon: const Icon(Icons.arrow_back,
+                          color: Color(0xFF21201E)),
+                      onPressed: () => Navigator.pop(context),
+                    ),
                   ),
-                ),
-              ),
-
-              Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  children: [
-                    // Merge: Enable Notifications + Discounts & Gifts
-                    _buildGroup([
-                      _buildDrawerItem(context, CupertinoIcons.bell,
-                          'Enable notifications', () => {}),
-                      _buildDrawerItem(
-                          context, CupertinoIcons.gift, 'Discounts & gifts',
-                          () {
+                  Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: GestureDetector(
+                      onTap: () {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) => const DiscountPage(),
+                            builder: (context) => const RiderSettingsPage(),
                           ),
                         );
-                      }),
-                    ]),
-
-                    // History (alone)
-                    _buildGroup([
-                      _buildDrawerItem(context, CupertinoIcons.time, 'History',
-                          () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const OrderHistoryPage(),
+                      },
+                      child: Row(
+                        children: [
+                          const CircleAvatar(
+                            radius: 28,
+                            backgroundImage:
+                                AssetImage('lib/shared/assets/user.png'),
                           ),
-                        );
-                      }),
-                      _buildDrawerItem(context, CupertinoIcons.phone,
-                          'Call Center', () => _callPhone(context)),
-                      _buildDrawerItem(context, CupertinoIcons.info_circle,
-                          'About Us', () => _openWebsite(context)),
-                    ]),
-
-                    // Logout (alone)
-                    _buildGroup([
-                      _buildDrawerItem(
-                          context,
-                          CupertinoIcons.square_arrow_right,
-                          'Logout',
-                          () => _logout(context)),
-                    ]),
-                  ],
-                ),
-              ),
-
-              // Bottom Action
-              Padding(
-                padding: const EdgeInsets.fromLTRB(
-                    16, 16, 16, 32), // extra bottom padding
-                child: Text(
-                  "© All rights reserved",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.grey[600], // grey color
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  userName,
+                                  style:
+                                      RideRequestPageStyles.titleStyle.copyWith(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w600,
+                                    color: const Color(0xFF21201E),
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  userPhoneNumber,
+                                  style: RideRequestPageStyles.subtitleStyle
+                                      .copyWith(
+                                    color: const Color(0xFF21201E)
+                                        .withOpacity(0.6),
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
-              ),
-            ],
+                  Expanded(
+                    child: ListView(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      children: [
+                        _buildGroup([
+                          _buildDrawerItem(context, CupertinoIcons.bell,
+                              'Enable notifications', () => {}),
+                          _buildDrawerItem(
+                              context, CupertinoIcons.gift, 'Discounts & gifts',
+                              () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const DiscountPage(),
+                              ),
+                            );
+                          }),
+                        ]),
+                        _buildGroup([
+                          _buildDrawerItem(
+                              context, CupertinoIcons.time, 'History', () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const OrderHistoryPage(),
+                              ),
+                            );
+                          }),
+                          _buildDrawerItem(context, CupertinoIcons.phone,
+                              'Call Center', () => _callPhone(context)),
+                          _buildDrawerItem(context, CupertinoIcons.info_circle,
+                              'About Us', () => _openWebsite(context)),
+                        ]),
+                        _buildGroup([
+                          _buildDrawerItem(
+                              context,
+                              CupertinoIcons.square_arrow_right,
+                              'Logout',
+                              () => _logout(context)),
+                        ]),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+                    child: Text(
+                      "© All rights reserved",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         ),
       );
-
 // Drawer item
   Widget _buildDrawerItem(BuildContext context, IconData icon, String title,
           VoidCallback onTap) =>
@@ -808,7 +811,9 @@ class RideRequestPage extends HookConsumerWidget {
 
   Future<void> _logout(BuildContext context) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('driverObjectId');
+    await prefs.remove('userObjectId');
+    await prefs.remove('userName');
+    await prefs.remove('userPhoneNumber');
     if (context.mounted) {
       Navigator.pushReplacement(context,
           MaterialPageRoute(builder: (context) => const GetStartedPage()));
@@ -1090,6 +1095,27 @@ class RideRequestPage extends HookConsumerWidget {
     required String destination,
     required Map<String, double> fares,
   }) {
+    final promoController = TextEditingController();
+    DiscountCode? appliedDiscount;
+    Future<DiscountCode?> _validatePromoCode(String code) async {
+      final query = QueryBuilder<ParseObject>(ParseObject('DiscountCode'))
+        ..whereEqualTo('code', code.trim());
+
+      final response = await query.query();
+      if (response.success &&
+          response.results != null &&
+          response.results!.isNotEmpty) {
+        return DiscountCode.fromParse(response.results!.first as ParseObject);
+      }
+      return null;
+    }
+
+    Map<String, double> _applyDiscount(
+        Map<String, double> fares, DiscountCode discount) {
+      final factor = (100 - discount.amount) / 100.0;
+      return fares.map((key, value) => MapEntry(key, value * factor));
+    }
+
     final cars = [
       {
         'name': 'Economy',
@@ -1132,6 +1158,89 @@ class RideRequestPage extends HookConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text("Available Cars", style: RideRequestPageStyles.titleStyle),
+            const SizedBox(height: RideRequestPageStyles.spacing),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: promoController,
+                    decoration: InputDecoration(
+                      hintText: 'Enter Promo Code',
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(
+                          RideRequestPageStyles.borderRadius,
+                        ),
+                        borderSide: BorderSide.none,
+                      ),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  height: 48,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.grey.shade300,
+                        Colors.grey.shade400,
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(
+                      RideRequestPageStyles.borderRadius,
+                    ),
+                  ),
+                  child: TextButton(
+                    onPressed: () async {
+                      final code = promoController.text.trim();
+                      if (code.isEmpty) return;
+
+                      final discount = await _validatePromoCode(code);
+
+                      if (discount != null) {
+                        appliedDiscount = discount;
+                        fares = _applyDiscount(fares, discount);
+
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                  'Promo applied: ${discount.title} - ${discount.amount}% off'),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                        }
+                      } else {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Invalid promo code'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
+                      }
+                    },
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      foregroundColor: Colors.black87,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(
+                          RideRequestPageStyles.borderRadius,
+                        ),
+                      ),
+                    ),
+                    child: const Text("Apply"),
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: RideRequestPageStyles.spacing),
             ...cars.map((car) {
               final name = car['name'] as String; // Explicit cast to String

@@ -31,6 +31,8 @@ class AuthService {
       final objectId = (response.result as ParseObject).objectId;
       if (objectId != null) {
         await prefs.setString('userObjectId', objectId);
+        await prefs.setString('userName', "User");
+        await prefs.setString('userPhoneNumber', phoneNumber);
       }
       // Send OTP via SMS API (simulate for now)
       print('OTP sent to $phoneNumber is $otp'); // Replace with real SMS API
